@@ -35,8 +35,10 @@ Tests should use a **Test Orchestrator** (often called "Tester") that hides infr
 
 ```javascript
 // Test Orchestrator
-const createTester = async ({listProfilesResults}) => {
-    const backend = createBackend({listProfilesResults})
+const createTester = async () => {
+    const backend = createBackend({
+        listProfilesResults: [[], []]  // empty, then will have added profile
+    })
     const updateSummary = jest.fn()
     let rendered
     await act(async () => {
@@ -69,36 +71,44 @@ const createTester = async ({listProfilesResults}) => {
         })
     }
 
+    // Query methods
+    const isProfileDisplayed = name => {
+        return rendered.queryByText(name) !== null
+    }
+
+    const wasProfileAdded = name => {
+        return backend.addProfile.mock.calls.some(call => call[0] === name)
+    }
+
+    const wasSummaryUpdated = () => {
+        return updateSummary.mock.calls.length > 0
+    }
+
     // Return orchestrator interface
     return {
         clickDeleteButton,
         typeProfileName,
         pressKey,
-        backend,
-        updateSummary,
-        rendered
+        isProfileDisplayed,
+        wasProfileAdded,
+        wasSummaryUpdated
     }
 }
 
 // Test using orchestrator
 test('add profile', async () => {
     // given
-    const sample = createSample()
-    const profile = sample.profile()
-    const profilesBefore = []
-    const profilesAfter = [profile]
-    const tester = await createTester({
-        listProfilesResults: [profilesBefore, profilesAfter]
-    })
+    const tester = await createTester()
+    const profileName = "Alice"
 
     // when
-    await tester.typeProfileName(profile.name)
+    await tester.typeProfileName(profileName)
     await tester.pressKey('Enter')
 
     // then
-    expect(tester.rendered.getByText(profile.name)).toBeInTheDocument()
-    expect(tester.backend.addProfile.mock.calls).toEqual([[profile.name]])
-    expect(tester.updateSummary.mock.calls.length).toEqual(1)
+    expect(tester.isProfileDisplayed(profileName)).toBeTruthy()
+    expect(tester.wasProfileAdded(profileName)).toBeTruthy()
+    expect(tester.wasSummaryUpdated()).toBeTruthy()
 });
 ```
 
@@ -110,9 +120,12 @@ test('add profile', async () => {
 - Mock setup
 
 **What tests see:**
-- `typeProfileName(name)`
-- `pressKey(key)`
-- `clickDeleteButton(id)`
+- `typeProfileName(name)` - action
+- `pressKey(key)` - action
+- `clickDeleteButton(id)` - action
+- `isProfileDisplayed(name)` - query
+- `wasProfileAdded(name)` - query
+- `wasSummaryUpdated()` - query
 
 ### Java Unit Test
 
