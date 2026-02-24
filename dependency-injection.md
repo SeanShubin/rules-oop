@@ -82,7 +82,6 @@ class ApplicationDependencies(
     private val clock = integrations.clock
     // ... more wiring ...
     val runner: Runnable = Runner(clock, /* ... */)
-    val errorMessageHolder: ErrorMessageHolder = ErrorMessageHolderImpl()
 }
 
 // Entry point orchestrates: wire -> work -> wire -> work
@@ -95,7 +94,7 @@ fun execute(args: Array<String>): Int {
     val appDeps = ApplicationDependencies(integrations, configuration)  // Stage 3: WIRING
     appDeps.runner.run()  // Stage 3: WORK ←
 
-    return if (appDeps.errorMessageHolder.errorMessage == null) 0 else 1
+    return integrations.exitCode.value
 }
 ```
 
@@ -173,7 +172,7 @@ fun execute(args: Array<String>): Int {
     val appDeps = ApplicationDependencies(integrations, configuration, services)
     appDeps.runner.run()
 
-    return if (appDeps.errorMessageHolder.errorMessage == null) 0 else 1
+    return integrations.exitCode.value
 }
 ```
 
@@ -503,6 +502,132 @@ Just as you wouldn't `new SqlDatabase()` deep in your code (you'd inject `Databa
 2. Should I inject a dispatcher dependency instead?
 3. Am I making tests harder by hardcoding this?
 
+### Exit Code Handling
+
+Exit code is the only value forced by the OS boundary (`System.exit(Int)` / `exitProcess(Int)`). How you track errors internally is an application choice - the exit code just communicates success/failure to the OS.
+
+**The Pattern:**
+
+Exit code belongs in Integrations because it's a boundary concern - it's the application's return value to the OS/shell. This makes it accessible to all stages (Bootstrap, Schema, Application), not just the final stage.
+
+**Implementation:**
+
+```kotlin
+// domain-api
+interface ExitCode {
+    var value: Int
+}
+
+// domain-impl
+class ExitCodeImpl : ExitCode {
+    override var value: Int = 0  // Default to success
+}
+
+// Integrations
+interface Integrations {
+    val commandLineArgs: Array<String>
+    val files: Files
+    val emitLine: (String) -> Unit
+    val exitCode: ExitCode  // Exit code is a boundary concern
+}
+
+class ProductionIntegrations(
+    override val commandLineArgs: Array<String>
+) : Integrations {
+    override val files: Files = ProductionFiles
+    override val emitLine: (String) -> Unit = ::println
+    override val exitCode: ExitCode = ExitCodeImpl()
+}
+
+// Service class can set exit code
+class ReportGenerator(
+    private val csvReader: CsvReader,
+    private val exitCode: ExitCode
+) {
+    fun generate() {
+        val data = csvReader.read()
+        if (data.isEmpty()) {
+            exitCode.value = 1  // Signal error
+            return
+        }
+        // ... process data
+    }
+}
+
+// Entry point returns exit code
+fun main(args: Array<String>) {
+    val exitCode = execute(args)
+    System.exit(exitCode)
+}
+
+fun execute(args: Array<String>): Int {
+    val integrations = ProductionIntegrations(args)
+
+    val bootstrapDeps = BootstrapDependencies(integrations)
+    val configuration = bootstrapDeps.bootstrap.loadConfiguration()
+
+    val appDeps = ApplicationDependencies(integrations, configuration)
+    appDeps.reportGenerator.generate()
+
+    return integrations.exitCode.value  // Query from Integrations
+}
+```
+
+**Why in Integrations, not ApplicationDependencies?**
+
+1. **Exit code is a boundary concern** - It goes to the OS, so it belongs with other boundary crossings
+2. **Any stage might need to set it** - Bootstrap might fail loading config (exit code 1), Schema might fail validation (exit code 2), Application might fail processing (exit code 3)
+3. **ApplicationDependencies only exists in final stage** - Earlier stages can't access it if it's there
+
+**Error Representation is Separate:**
+
+Exit code (Int) is forced by the OS boundary. How you represent errors internally is an application choice:
+- **Exceptions** - Service methods throw, entry point catches and sets exit code
+- **Result types** - Service methods return `Result<T>`, entry point maps to exit code
+- **Error messages** - Service methods set error strings, entry point decides exit code
+- **Sealed classes** - Service methods return typed errors, entry point maps to exit codes
+
+The exit code mechanism is independent of your error handling strategy. You can add exception handling, Result types, or error messages later without changing the basic exit code structure.
+
+**Testing:**
+
+Test orchestrators expose the exit code for verification:
+
+```kotlin
+class ApplicationTester {
+    fun runApplication(configFileName: String): Int {
+        val exitCode = ExitCodeImpl()
+        val testIntegrations = TestIntegrations(
+            commandLineArgs = arrayOf(configFileName),
+            files = fakeFiles,
+            emitLine = { line -> capturedOutput.add(line) },
+            exitCode = exitCode
+        )
+        return runApplication(testIntegrations)
+    }
+}
+
+@Test
+fun `returns exit code 0 on success`() {
+    val tester = ApplicationTester()
+    tester.setupValidData()
+
+    val exitCode = tester.runApplication("config.txt")
+
+    assertEquals(0, exitCode)
+}
+
+@Test
+fun `returns exit code 1 on error`() {
+    val tester = ApplicationTester()
+    tester.setupInvalidData()
+
+    val exitCode = tester.runApplication("config.txt")
+
+    assertEquals(1, exitCode)
+}
+```
+
 ## Verification Checklists
 
 Use these checklists when reviewing code to ensure complete adherence to dependency injection principles.
@@ -519,6 +644,7 @@ Verify ALL application boundary crossings are in Integrations - both inputs comi
 
 **External Outputs and Services (application interacting with outside world):**
 - [ ] **Standard output** - println, System.out, System.err
+- [ ] **Exit code** - Application's return value to OS/shell (process exit code)
 - [ ] **File system** - Files interface, FileSystem, any paths pointing to real disk
 - [ ] **Network** - HTTP clients, sockets, REST APIs, GraphQL clients
 - [ ] **Database** - JDBC connections, query executors, ORM sessions
@@ -641,7 +767,7 @@ fun execute(args: Array<String>): Int {
     val appDeps = ApplicationDependencies(integrations, configuration)
     appDeps.runner.run()
 
-    return if (appDeps.errorMessageHolder.errorMessage == null) 0 else 1
+    return integrations.exitCode.value
 }
 ```
 
@@ -682,7 +808,6 @@ class ApplicationDependencies(
     )
 
     val runner: Runnable = Runner(clock, observer, reports)
-    val errorMessageHolder: ErrorMessageHolder = ErrorMessageHolderImpl()
 }
 ```
 

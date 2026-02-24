@@ -548,6 +548,148 @@ The pattern **supports** the architectural rules but is specifically about **tes
 - Setup is trivial (one line)
 - Only one test exists for the scenario
 
+## Testing Exit Codes
+
+Test orchestrators should expose exit codes for verification, allowing tests to verify both success and error paths.
+
+### Pattern
+
+The test orchestrator's action method returns the exit code from `runApplication()`:
+
+```kotlin
+class ApplicationTester {
+    private val fakeFileContents = mutableMapOf<String, List<String>>()
+    private val capturedOutput = mutableListOf<String>()
+
+    // Setup methods
+    fun setupConfigFile(fileName: String, csvPath: String, columns: String, format: String) {
+        val lines = listOf(
+            "csv-path=$csvPath",
+            "columns=$columns",
+            "format=$format"
+        )
+        fakeFileContents[fileName] = lines
+    }
+
+    fun setupCsvFile(fileName: String, header: List<String>, rows: List<List<String>>) {
+        val headerLine = header.joinToString(",")
+        val dataLines = rows.map { row -> row.joinToString(",") }
+        fakeFileContents[fileName] = listOf(headerLine) + dataLines
+    }
+
+    // Action method - returns exit code
+    fun runApplication(configFileName: String): Int {
+        val fakeFiles = FakeFiles(fakeFileContents)
+        val exitCode = ExitCodeImpl()
+        val testIntegrations: Integrations = TestIntegrations(
+            commandLineArgs = arrayOf(configFileName),
+            files = fakeFiles,
+            emitLine = { line -> capturedOutput.add(line) },
+            exitCode = exitCode
+        )
+        return runApplication(testIntegrations)  // Returns Int
+    }
+
+    // Query methods
+    fun outputContains(text: String): Boolean {
+        return capturedOutput.any { it.contains(text) }
+    }
+}
+```
+
+### Testing Success and Error Paths
+
+```kotlin
+@Test
+fun `returns exit code 0 on success`() {
+    val tester = ApplicationTester()
+    tester.setupConfigFile("config.txt",
+        csvPath = "data.csv",
+        columns = "name,department",
+        format = "TABLE")
+    tester.setupCsvFile("data.csv",
+        header = listOf("name", "age", "department"),
+        rows = listOf(listOf("Alice", "28", "Engineering")))
+
+    val exitCode = tester.runApplication("config.txt")
+
+    assertEquals(0, exitCode)
+    assertTrue(tester.outputContains("Alice"))
+    assertTrue(tester.outputContains("Engineering"))
+}
+
+@Test
+fun `returns exit code 1 when CSV is empty`() {
+    val tester = ApplicationTester()
+    tester.setupConfigFile("config.txt",
+        csvPath = "empty.csv",
+        columns = "name",
+        format = "TABLE")
+    tester.setupCsvFile("empty.csv",
+        header = emptyList(),
+        rows = emptyList())
+
+    val exitCode = tester.runApplication("config.txt")
+
+    assertEquals(1, exitCode)
+    assertTrue(tester.outputContains("CSV file is empty"))
+}
+
+@Test
+fun `returns exit code 2 when file not found`() {
+    val tester = ApplicationTester()
+    tester.setupConfigFile("config.txt",
+        csvPath = "missing.csv",
+        columns = "name",
+        format = "TABLE")
+    // Don't setup the CSV file
+
+    val exitCode = tester.runApplication("config.txt")
+
+    assertEquals(2, exitCode)
+    assertTrue(tester.outputContains("file not found"))
+}
+```
+
+### Benefits
+
+1. **Tests verify success and error paths** - Can assert on specific exit codes
+2. **Tests are self-contained** - Don't need to check process exit
+3. **Tests document error conditions** - Exit codes show what errors are possible
+4. **Orchestrator hides complexity** - Tests don't see ExitCodeImpl construction
+5. **Exit code accessible** - Test orchestrator exposes it through return value
+
+### Integration with Integrations Pattern
+
+Exit code belongs in Integrations (not ApplicationDependencies) because:
+- It's a boundary concern (process exit code → OS)
+- Any stage can set it (Bootstrap, Schema, Application)
+- Tests substitute entire Integrations, including exit code
+
+```kotlin
+// Production
+fun main(args: Array<String>) {
+    val integrations: Integrations = ProductionIntegrations(args)
+    val exitCode = runApplication(integrations)
+    System.exit(exitCode)
+}
+
+fun runApplication(integrations: Integrations): Int {
+    // ... stages
+    return integrations.exitCode.value
+}
+
+// Tests
+val testIntegrations: Integrations = TestIntegrations(
+    commandLineArgs = testArgs,
+    files = fakeFiles,
+    emitLine = { line -> capturedOutput.add(line) },
+    exitCode = ExitCodeImpl()  // Test controls exit code
+)
+val exitCode = runApplication(testIntegrations)
+assertEquals(expectedExitCode, exitCode)
+```
+
 ## Anti-Patterns to Avoid
 
 ### ❌ Exposing Low-Level Details in Test
