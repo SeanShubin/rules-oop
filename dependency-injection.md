@@ -50,19 +50,14 @@ This makes staging explicit and prevents hidden side effects. When you see a con
 ```kotlin
 // Service class - does work via methods
 class Bootstrap(
-    private val integrations: Integrations  // Constructor-injected dependencies
+    private val integrations: Integrations,
+    private val configurationLoader: ConfigurationLoader
 ) {
     private val argsParser = ArgsParser
 
     fun loadConfiguration(): Configuration {  // Work happens in methods
-        val configBaseName = argsParser.parseConfigBaseName(integrations.commandLineArgs)
-        val loader = ConfigurationLoader(integrations, configBaseName)
-        return loader.load()
-    }
-
-    fun loadConfiguration(configBaseName: String): Configuration {  // Overload for external config source
-        val loader = ConfigurationLoader(integrations, configBaseName)
-        return loader.load()
+        val configPath = argsParser.parseConfigPath(integrations.commandLineArgs)
+        return configurationLoader.load(configPath)
     }
 }
 
@@ -70,39 +65,77 @@ class Bootstrap(
 class BootstrapDependencies(
     integrations: Integrations
 ) {
-    val bootstrap: Bootstrap = Bootstrap(integrations)  // Only constructor calls
+    private val files = integrations.files
+    private val configurationLoader = ConfigurationLoader(files)
+
+    val bootstrap: Bootstrap = Bootstrap(integrations, configurationLoader)  // Only constructor calls
+}
+
+// Composition root - only wiring
+class SchemaDependencies(
+    integrations: Integrations,
+    configuration: Configuration
+) {
+    private val files = integrations.files
+    private val csvPath = configuration.csvPath
+
+    val schemaLoader: SchemaLoader = SchemaLoader(files, csvPath)
 }
 
 // Composition root - only wiring
 class ApplicationDependencies(
     integrations: Integrations,
-    configuration: Configuration
+    configuration: Configuration,
+    schema: Schema
 ) {
     private val files = integrations.files
-    private val clock = integrations.clock
-    // ... more wiring ...
-    val runner: Runnable = Runner(clock, /* ... */)
+    private val emitLine = integrations.emitLine
+    private val exitCode = integrations.exitCode
+
+    private val csvPath = configuration.csvPath
+    private val columnsToInclude = configuration.columnsToInclude
+    private val columnType = configuration.columnType
+    private val outputFormat = configuration.outputFormat
+
+    private val csvReader = CsvReader(files)
+
+    val reportGenerator: ReportGenerator = ReportGenerator(
+        csvReader,
+        csvPath,
+        columnsToInclude,
+        columnType,
+        outputFormat,
+        schema,
+        emitLine,
+        exitCode
+    )
 }
 
 // Entry point orchestrates: wire -> work -> wire -> work
-fun execute(args: Array<String>): Int {
-    val integrations = ProductionIntegrations(args)           // Stage 1: WIRING
+fun runApplication(integrations: Integrations): Int {
+    // Stage 1: Bootstrap - WIRING
+    val bootstrapDeps = BootstrapDependencies(integrations)
+    val configuration = bootstrapDeps.bootstrap.loadConfiguration()  // WORK
 
-    val bootstrapDeps = BootstrapDependencies(integrations)   // Stage 2: WIRING
-    val configuration = bootstrapDeps.bootstrap.loadConfiguration()  // Stage 2: WORK ←
+    // Stage 2: Schema - WIRING
+    val schemaDeps = SchemaDependencies(integrations, configuration)
+    val schema = schemaDeps.schemaLoader.loadSchema()  // WORK
 
-    val appDeps = ApplicationDependencies(integrations, configuration)  // Stage 3: WIRING
-    appDeps.runner.run()  // Stage 3: WORK ←
+    // Stage 3: Application - WIRING
+    val appDeps = ApplicationDependencies(integrations, configuration, schema)
+    appDeps.reportGenerator.generate()  // WORK
 
     return integrations.exitCode.value
 }
 ```
 
 **What makes this pattern work:**
-- You can **see** where work happens (method calls like `.loadConfiguration()`, `.run()`)
-- You can **see** where wiring happens (constructors like `BootstrapDependencies(...)`)
+- You can **see** where work happens (method calls like `.loadConfiguration()`, `.loadSchema()`, `.generate()`)
+- You can **see** where wiring happens (constructors like `BootstrapDependencies(...)`, `SchemaDependencies(...)`)
 - The staging sequence is **explicit** in the entry point, not buried in constructor calls
 - Each `XyzDependencies` class is **pure wiring** - easy to verify, nothing to test
+- **Three stages** demonstrate the pattern scales to any number of stages
+- **Later stages can depend on multiple earlier results** (ApplicationDependencies takes integrations, configuration, AND schema)
 
 #### Why Constructors Must Not Do Work
 

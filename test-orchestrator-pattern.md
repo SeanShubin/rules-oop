@@ -197,6 +197,146 @@ static class Tester {
 - `messageDigestForDirectory(path)`
 - `getEvents()`
 
+### Kotlin Full Application Test (Deep Testing with Staged DI)
+
+This example demonstrates how the Test Orchestrator pattern integrates with Staged Dependency Injection to enable deep testing - testing the entire application with fake integrations at the boundary.
+
+```kotlin
+class ApplicationTester {
+    private val fakeFileContents = mutableMapOf<String, List<String>>()
+    private val capturedOutput = mutableListOf<String>()
+
+    // Setup methods - configure fake behavior
+    fun setupConfigFile(fileName: String, csvPath: String, columns: String, format: String) {
+        val lines = listOf(
+            "csv-path=$csvPath",
+            "columns=$columns",
+            "format=$format"
+        )
+        fakeFileContents[fileName] = lines
+    }
+
+    fun setupCsvFile(fileName: String, header: List<String>, rows: List<List<String>>) {
+        val headerLine = header.joinToString(",")
+        val dataLines = rows.map { row -> row.joinToString(",") }
+        fakeFileContents[fileName] = listOf(headerLine) + dataLines
+    }
+
+    // Action method - returns exit code
+    fun runApplication(configFileName: String): Int {
+        val fakeFiles = FakeFiles(fakeFileContents)
+        val exitCode = ExitCodeImpl()
+        val testIntegrations: Integrations = TestIntegrations(
+            commandLineArgs = arrayOf(configFileName),
+            files = fakeFiles,
+            emitLine = { line -> capturedOutput.add(line) },
+            exitCode = exitCode
+        )
+        return com.seanshubin.csv.report.console.runApplication(testIntegrations)
+    }
+
+    // Query methods - for assertions
+    fun outputContains(text: String): Boolean {
+        return capturedOutput.any { it.contains(text) }
+    }
+
+    fun getOutputLineCount(): Int = capturedOutput.size
+}
+
+// Test using orchestrator
+@Test
+fun `full application flow with fake integrations`() {
+    // given
+    val tester = ApplicationTester()
+    tester.setupConfigFile("test-config.txt",
+        csvPath = "test-data.csv",
+        columns = "name,department",
+        format = "TABLE"
+    )
+    tester.setupCsvFile("test-data.csv",
+        header = listOf("name", "age", "department", "salary"),
+        rows = listOf(
+            listOf("Alice", "28", "Engineering", "75000"),
+            listOf("Bob", "35", "Marketing", "82000")
+        )
+    )
+
+    // when
+    tester.runApplication("test-config.txt")
+
+    // then
+    assertTrue(tester.outputContains("Alice"))
+    assertTrue(tester.outputContains("Engineering"))
+    assertTrue(!tester.outputContains("salary"))  // Filtered out
+    assertEquals(5, tester.getOutputLineCount())
+}
+
+@Test
+fun `filter numeric columns using schema`() {
+    // given
+    val tester = ApplicationTester()
+    tester.setupConfigFile("test-config.txt",
+        csvPath = "test-data.csv",
+        columnType = "NUMBER",
+        format = "TABLE"
+    )
+    tester.setupCsvFile("test-data.csv",
+        header = listOf("name", "age", "department", "salary"),
+        rows = listOf(
+            listOf("Alice", "28", "Engineering", "75000"),
+            listOf("Bob", "35", "Marketing", "82000")
+        )
+    )
+
+    // when
+    tester.runApplication("test-config.txt")
+
+    // then - only numeric columns shown
+    assertTrue(tester.outputContains("age"))
+    assertTrue(tester.outputContains("salary"))
+
+    // text columns NOT shown
+    assertTrue(!tester.outputContains("name"))
+    assertTrue(!tester.outputContains("department"))
+}
+```
+
+**What the ApplicationTester hides:**
+- FakeFiles construction
+- ExitCodeImpl creation
+- TestIntegrations wiring (commandLineArgs, files, emitLine, exitCode)
+- Output capture mechanism
+- String parsing and matching logic
+- All three stages of the application (Bootstrap → Schema → Application)
+
+**What tests see:**
+- `setupConfigFile(fileName, csvPath, columns, format)`
+- `setupCsvFile(fileName, header, rows)`
+- `runApplication(configFileName)` → Int
+- `outputContains(text)` → Boolean
+- `getOutputLineCount()` → Int
+
+**Integration with Staged Dependency Injection:**
+
+The `runApplication` method swaps the entire `Integrations` object:
+
+```kotlin
+// Production (in main)
+val integrations: Integrations = ProductionIntegrations(args)
+val exitCode = runApplication(integrations)
+
+// Test (in ApplicationTester)
+val testIntegrations: Integrations = TestIntegrations(
+    commandLineArgs = testArgs,
+    files = fakeFiles,
+    emitLine = capturedOutput::add,
+    exitCode = exitCode
+)
+return runApplication(testIntegrations)
+```
+
+This enables **deep testing** - the entire application runs with fakes at the boundary. All three stages (Bootstrap, Schema, Application) execute with fake dependencies, testing the full integration without mocking internal collaborators.
+
 ### Kotlin Component Test
 
 ```kotlin
