@@ -112,20 +112,18 @@ class ApplicationDependencies(
 }
 
 // Entry point orchestrates: wire -> work -> wire -> work
-fun runApplication(integrations: Integrations): Int {
-    // Stage 1: Bootstrap - WIRING
-    val bootstrapDeps = BootstrapDependencies(integrations)
-    val configuration = bootstrapDeps.bootstrap.loadConfiguration()  // WORK
+fun runApplication(integrations: Integrations) {
+    // Stage 1: Bootstrap
+    val bootstrapDeps = BootstrapDependencies(integrations)  // wiring
+    val configuration = bootstrapDeps.bootstrap.loadConfiguration()  // work
 
-    // Stage 2: Schema - WIRING
-    val schemaDeps = SchemaDependencies(integrations, configuration)
-    val schema = schemaDeps.schemaLoader.loadSchema()  // WORK
+    // Stage 2: Manifest Building
+    val manifestDeps = ManifestDependencies(integrations, configuration)  // wiring
+    val manifest = manifestDeps.manifestBuilder.buildManifest()  // work
 
-    // Stage 3: Application - WIRING
-    val appDeps = ApplicationDependencies(integrations, configuration, schema)
-    appDeps.reportGenerator.generate()  // WORK
-
-    return integrations.exitCode.value
+    // Stage 3: Application
+    val appDeps = ApplicationDependencies(integrations, configuration, manifest)  // wiring
+    appDeps.manifestUploader.upload()  // work
 }
 ```
 
@@ -247,65 +245,85 @@ The staged dependency injection pattern extends naturally to concurrent/async sy
 
 ```kotlin
 // Entry point - bridges from sequential to concurrent land
-fun main(args: Array<String>) = runBlocking {  // ← Enter concurrent land once
-    val integrations = ProductionIntegrations(args)  // Wiring
+fun main(args: Array<String>) {
+    val integrations: Integrations = ProductionIntegrations(args)
+    val exitCode = runBlocking {  // ← Enter concurrent land once
+        execute(integrations)
+    }
+    exitProcess(exitCode)
+}
 
+// Exception handler - suspend function
+suspend fun execute(integrations: Integrations): Int {
+    return try {
+        runApplication(integrations)
+        ExitCodes.SUCCESS
+    } catch (e: ApplicationException) {
+        System.err.println("Error: ${e.message}")
+        e.exitCode
+    } catch (e: Exception) {
+        System.err.println("Unexpected error: ${e.message}")
+        e.printStackTrace()
+        ExitCodes.GENERAL_ERROR
+    }
+}
+
+// Pure happy path - suspend function
+suspend fun runApplication(integrations: Integrations) {
     val bootstrapDeps = BootstrapDependencies(integrations)
-    val config = bootstrapDeps.bootstrap.loadConfiguration()  // suspend fun - work in concurrent land
+    val configuration = bootstrapDeps.bootstrap.loadConfiguration()  // suspend fun
 
-    val appDeps = ApplicationDependencies(integrations, config)
-    appDeps.runner.run()  // suspend fun - stays in concurrent land
+    val manifestDeps = ManifestDependencies(integrations, configuration)
+    val manifest = manifestDeps.manifestBuilder.buildManifest()  // suspend fun
+
+    val appDeps = ApplicationDependencies(integrations, configuration, manifest)
+    appDeps.manifestUploader.upload()  // suspend fun
 }
 
-// Service class with suspend functions
-class Bootstrap(private val integrations: Integrations) {
-    private val argsParser = ArgsParser
-
-    suspend fun loadConfiguration(): Configuration {  // ← suspend, not blocking
-        val configBaseName = argsParser.parseConfigBaseName(integrations.commandLineArgs)
-        val loader = ConfigurationLoader(integrations, configBaseName)
-        return loader.load()  // ← also suspend
-    }
+// Integrations for coroutines - uses delay instead of sleep
+interface Integrations {
+    val commandLineArgs: Array<String>
+    val files: FilesContract
+    val messageDigest: MessageDigestContract
+    val httpClient: HttpClientContract
+    val delay: suspend (Long) -> Unit  // ← suspend function for non-blocking delay
+    val clock: () -> Instant
+    val emitLine: (String) -> Unit
+    val exitCode: ExitCode
 }
 
-// All business logic uses suspend functions
-interface Database {
-    suspend fun query(sql: String): ResultSet
-}
-
-interface Notifications {
-    suspend fun send(message: String)
-}
-
-class Runner(
-    private val database: Database,
-    private val notifications: Notifications
-) {
-    suspend fun run() {  // ← suspend, all work happens in concurrent land
-        val results = database.query("SELECT ...")
-        notifications.send("Processing...")
-        // Everything from here is concurrent/async
-    }
+class ProductionIntegrations(
+    override val commandLineArgs: Array<String>
+) : Integrations {
+    override val files: FilesContract = FilesDelegate.defaultInstance()
+    override val messageDigest: MessageDigestContract = MessageDigestDelegate(MessageDigest.getInstance("SHA-256"))
+    override val httpClient: HttpClientContract = HttpClientDelegate.defaultInstance()
+    override val delay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) }  // ← Coroutines delay
+    override val clock: () -> Instant = Instant::now
+    override val emitLine: (String) -> Unit = ::println
+    override val exitCode: ExitCode = ExitCodeImpl()
 }
 ```
 
 **Key Points:**
 
 1. **`runBlocking` appears only at boundaries:**
-   - Entry point (`main()` function)
+   - Entry point (`main()` function) - wraps call to execute()
    - Test functions (`@Test fun myTest() = runBlocking { ... }`)
+   - ApplicationTester.runApplication() - bridges blocking test to suspend function
    - Rare cases bridging back to blocking code
 
 2. **Most code uses `suspend` functions:**
+   - Exception handler: `suspend fun execute(integrations: Integrations): Int`
+   - Happy path: `suspend fun runApplication(integrations: Integrations)`
    - Business logic: `suspend fun processOrder(order: Order): Result`
    - I/O operations: `suspend fun Database.query(sql: String): ResultSet`
-   - Event handlers: `suspend fun handleEvent(event: Event)`
    - All injected interfaces can have suspend methods
 
 3. **Constructor injection still applies:**
    - Dependencies are still constructor-injected
-   - Composition roots still do pure wiring
-   - Service classes still expose methods for work
+   - Composition roots still do pure wiring (not suspend)
+   - Service classes still expose methods for work (now suspend)
    - The only difference: methods are `suspend fun` instead of regular functions
 
 4. **Wiring vs Work separation is preserved:**
@@ -313,43 +331,75 @@ class Runner(
    - Methods do work (now with `suspend`)
    - Composition roots remain pure (no suspend, no work)
 
+5. **Exception handling pattern works with coroutines:**
+   - runApplication() = pure happy path (suspend, returns Unit)
+   - execute() = exception wrapper (suspend, returns Int)
+   - Same separation as blocking version, just with suspend
+
 **Visualization:**
 
 ```
 Sequential World (main)
       ↓
-  runBlocking { ... }        ← Enter concurrent land ONCE
+  runBlocking { ... }                  ← Enter concurrent land ONCE
       ↓
-  [All staging and work]     ← Everything uses suspend functions
-  - Bootstrap.loadConfiguration()  (suspend fun)
-  - ApplicationDependencies creation (wiring, not suspend)
-  - Runner.run()                   (suspend fun)
-  - Database.query()               (suspend fun)
-  - Notifications.send()           (suspend fun)
+  execute(integrations)                ← Exception wrapper (suspend fun)
       ↓
-  [Program ends]             ← Still in concurrent land
+  runApplication(integrations)         ← Happy path (suspend fun)
+      ↓
+  [All staging and work]               ← Everything uses suspend functions
+  - BootstrapDependencies creation     (wiring, not suspend)
+  - bootstrap.loadConfiguration()      (suspend fun)
+  - ManifestDependencies creation      (wiring, not suspend)
+  - manifestBuilder.buildManifest()    (suspend fun)
+  - ApplicationDependencies creation   (wiring, not suspend)
+  - manifestUploader.upload()          (suspend fun)
+      ↓
+  [Returns exit code]                  ← Still in concurrent land
+      ↓
+  exitProcess(exitCode)                ← Back to sequential world
 ```
 
 **Why This Works:**
 
 - **Minimal blocking overhead** - Only one `runBlocking` at the entry point
+- **Clean separation** - execute() wraps runApplication() with exception handling
 - **Natural concurrency** - All I/O can run concurrently by default
 - **Structured concurrency** - Cancellation propagates correctly through the chain
-- **Testable** - Tests use `runTest` instead of `runBlocking` for better control
+- **Testable** - ApplicationTester tests execute() which includes exception handling
 
 **Testing Concurrent Code:**
 
 ```kotlin
+class ApplicationTester(
+    private val applicationRunner: suspend (Integrations) -> Int
+) {
+    fun runApplication(configFileName: String): Int {
+        val exitCode = ExitCodeImpl()
+        val testIntegrations = TestIntegrations(
+            commandLineArgs = arrayOf(configFileName),
+            files = fakeFiles,
+            messageDigest = fakeMessageDigest,
+            httpClient = fakeHttpClient,
+            delay = { millis -> retryIntervals.add(millis) },  // ← delay, not sleep
+            clock = fakeClock,
+            emitLine = { line -> capturedOutput.add(line) },
+            exitCode = exitCode
+        )
+        return runBlocking {  // ← Bridge to suspend world
+            applicationRunner(testIntegrations)
+        }
+    }
+}
+
 @Test
-fun testRunner() = runTest {  // ← runTest instead of runBlocking
-    val fakeDatabase = FakeDatabase()
-    val fakeNotifications = FakeNotifications()
-    val runner = Runner(fakeDatabase, fakeNotifications)
+fun `test application with coroutines`() {
+    val tester = ApplicationTester(::execute)  // ← execute is suspend fun
+    tester.setupConfigFile(...)
 
-    runner.run()  // ← suspend fun, runs in test's concurrent context
+    val exitCode = tester.runApplication("config.txt")
 
-    assertEquals(1, fakeDatabase.queryCalls.size)
-    assertEquals(1, fakeNotifications.sendCalls.size)
+    assertEquals(0, exitCode)
 }
 ```
 
@@ -357,14 +407,17 @@ fun testRunner() = runTest {  // ← runTest instead of runBlocking
 
 | Aspect | Blocking (Traditional) | Concurrent (Suspend) |
 |--------|----------------------|---------------------|
-| Entry point | `fun main(args: Array<String>)` | `fun main(args: Array<String>) = runBlocking { ... }` |
-| Service methods | `fun run()` | `suspend fun run()` |
-| I/O interfaces | `fun query(sql: String): ResultSet` | `suspend fun query(sql: String): ResultSet` |
+| Entry point | `fun main(args: Array<String>)` | `fun main(args: Array<String>)` with `runBlocking { execute(...) }` |
+| Exception handler | `fun execute(integrations): Int` | `suspend fun execute(integrations): Int` |
+| Happy path | `fun runApplication(integrations)` | `suspend fun runApplication(integrations)` |
+| Service methods | `fun upload()` | `suspend fun upload()` |
+| I/O interfaces | `fun send(data): Response` | `suspend fun send(data): Response` |
+| Sleep/Delay | `sleep: (Long) -> Unit` | `delay: suspend (Long) -> Unit` |
 | Composition roots | Same (wiring only, no work) | Same (wiring only, no work) |
+| ApplicationTester | `(Integrations) -> Int` | `suspend (Integrations) -> Int` |
 | Where you live | Sequential land | Concurrent land (after runBlocking) |
-| Testing | `@Test fun test()` | `@Test fun test() = runTest { ... }` |
 
-**The Pattern:** Sequential code exists only at application lifecycle boundaries (startup/shutdown). Everything inside lives in concurrent land using `suspend` functions. Dependency injection, staged composition, and the wiring-vs-work separation all remain the same - only the execution context changes from sequential to concurrent.
+**The Pattern:** Sequential code exists only at application lifecycle boundaries (startup/shutdown). Everything inside lives in concurrent land using `suspend` functions. The execute()/runApplication() separation pattern works identically in both blocking and concurrent contexts - only the execution context changes from sequential to concurrent.
 
 #### Coroutine Context as Ambient Dependency
 
@@ -556,55 +609,91 @@ class ExitCodeImpl : ExitCode {
     override var value: Int = 0  // Default to success
 }
 
-// Integrations
+// Integrations - complete interface with all boundary crossings
 interface Integrations {
     val commandLineArgs: Array<String>
-    val files: Files
+    val files: FilesContract
+    val messageDigest: MessageDigestContract
+    val httpClient: HttpClientContract
+    val sleep: (Long) -> Unit
+    val clock: () -> Instant
     val emitLine: (String) -> Unit
-    val exitCode: ExitCode  // Exit code is a boundary concern
+    val exitCode: ExitCode
 }
 
 class ProductionIntegrations(
     override val commandLineArgs: Array<String>
 ) : Integrations {
-    override val files: Files = ProductionFiles
+    override val files: FilesContract = FilesDelegate.defaultInstance()
+    override val messageDigest: MessageDigestContract = MessageDigestDelegate(MessageDigest.getInstance("SHA-256"))
+    override val httpClient: HttpClientContract = HttpClientDelegate.defaultInstance()
+    override val sleep: (Long) -> Unit = Thread::sleep
+    override val clock: () -> Instant = Instant::now
     override val emitLine: (String) -> Unit = ::println
     override val exitCode: ExitCode = ExitCodeImpl()
 }
 
-// Service class can set exit code
-class ReportGenerator(
-    private val csvReader: CsvReader,
+// Service class can set exit code directly
+class ManifestUploader(
+    private val httpClient: HttpClientContract,
     private val exitCode: ExitCode
 ) {
-    fun generate() {
-        val data = csvReader.read()
-        if (data.isEmpty()) {
-            exitCode.value = 1  // Signal error
-            return
+    fun upload() {
+        val response = httpClient.send(manifest)
+        if (!response.isSuccess) {
+            exitCode.value = ExitCodes.NETWORK_ERROR
+            throw ApplicationException("Upload failed", ExitCodes.NETWORK_ERROR)
         }
-        // ... process data
     }
 }
 
-// Entry point returns exit code
-fun main(args: Array<String>) {
-    val exitCode = execute(args)
-    System.exit(exitCode)
-}
-
-fun execute(args: Array<String>): Int {
-    val integrations = ProductionIntegrations(args)
-
+// Pure happy path - no exception handling
+fun runApplication(integrations: Integrations) {
     val bootstrapDeps = BootstrapDependencies(integrations)
     val configuration = bootstrapDeps.bootstrap.loadConfiguration()
 
-    val appDeps = ApplicationDependencies(integrations, configuration)
-    appDeps.reportGenerator.generate()
+    val manifestDeps = ManifestDependencies(integrations, configuration)
+    val manifest = manifestDeps.manifestBuilder.buildManifest()
 
-    return integrations.exitCode.value  // Query from Integrations
+    val appDeps = ApplicationDependencies(integrations, configuration, manifest)
+    appDeps.manifestUploader.upload()
+}
+
+// Exception handler wraps happy path
+fun execute(integrations: Integrations): Int {
+    return try {
+        runApplication(integrations)
+        ExitCodes.SUCCESS
+    } catch (e: ApplicationException) {
+        System.err.println("Error: ${e.message}")
+        e.exitCode
+    } catch (e: Exception) {
+        System.err.println("Unexpected error: ${e.message}")
+        e.printStackTrace()
+        ExitCodes.GENERAL_ERROR
+    }
+}
+
+// Entry point
+fun main(args: Array<String>) {
+    val integrations: Integrations = ProductionIntegrations(args)
+    val exitCode = execute(integrations)
+    exitProcess(exitCode)
 }
 ```
+
+**Pattern: Separate Happy Path from Exception Handling**
+
+The pattern above demonstrates clean separation:
+- `runApplication()` = pure happy path (returns Unit, no exception handling)
+- `execute()` = exception wrapper (returns Int, catches and maps exceptions to exit codes)
+- `main()` = minimal entry point (create integrations, call execute, exit)
+
+Benefits:
+- runApplication() is easy to read - pure business logic with no error handling noise
+- execute() is testable through ApplicationTester (pass `::execute` as function reference)
+- Services can set exitCode.value directly OR throw exceptions - both mechanisms work
+- Main is minimal - just 3 lines of logic
 
 **Why in Integrations, not ApplicationDependencies?**
 
@@ -624,25 +713,31 @@ The exit code mechanism is independent of your error handling strategy. You can 
 
 **Testing:**
 
-Test orchestrators expose the exit code for verification:
+Test orchestrators take a function reference and expose exit codes for verification:
 
 ```kotlin
-class ApplicationTester {
+class ApplicationTester(
+    private val applicationRunner: (Integrations) -> Int  // ← Takes function reference
+) {
     fun runApplication(configFileName: String): Int {
         val exitCode = ExitCodeImpl()
         val testIntegrations = TestIntegrations(
             commandLineArgs = arrayOf(configFileName),
             files = fakeFiles,
+            messageDigest = fakeMessageDigest,
+            httpClient = fakeHttpClient,
+            sleep = { millis -> retryIntervals.add(millis) },
+            clock = fakeClock,
             emitLine = { line -> capturedOutput.add(line) },
             exitCode = exitCode
         )
-        return runApplication(testIntegrations)
+        return applicationRunner(testIntegrations)  // ← Calls injected function
     }
 }
 
 @Test
 fun `returns exit code 0 on success`() {
-    val tester = ApplicationTester()
+    val tester = ApplicationTester(::execute)  // ← Pass execute function
     tester.setupValidData()
 
     val exitCode = tester.runApplication("config.txt")
@@ -651,13 +746,13 @@ fun `returns exit code 0 on success`() {
 }
 
 @Test
-fun `returns exit code 1 on error`() {
-    val tester = ApplicationTester()
-    tester.setupInvalidData()
+fun `returns exit code 3 on network error`() {
+    val tester = ApplicationTester(::execute)
+    tester.setupInvalidNetwork()
 
     val exitCode = tester.runApplication("config.txt")
 
-    assertEquals(1, exitCode)
+    assertEquals(3, exitCode)  // ExitCodes.NETWORK_ERROR
 }
 ```
 
