@@ -227,7 +227,7 @@ fun main(args: Array<String>) {
 }
 ```
 
-**Why acceptable:** The absolute entry point (main function) runs before any composition roots exist. After creating Integrations (which bundles args and all other boundary crossings), use staged dependency injection to inject everything through Integrations - see the Dependency Injection rule's "Staged Dependency Injection" section.
+**Why acceptable:** The absolute entry point (main function) runs before any composition roots exist. After creating Integrations (which bundles args and all other boundary crossings), use staged dependency injection to inject everything through Integrations - see the Dependency Injection rule's "Composition Pipeline Pattern" section.
 
 ## Rationale
 

@@ -22,9 +22,17 @@ Classes that delegate to behavioral dependencies should depend on abstractions (
 - Factories create instances but must themselves be injected through composition roots
 - Domain objects know nothing about implementation details (databases, networks, frameworks); implementation classes know about domain objects
 
-### Staged Dependency Injection
+### Composition Pipeline Pattern
 
 When dependencies are not available at compile time (configuration files, service discovery, runtime initialization), break composition into multiple stages. The key principle: **make work vs wiring syntactically visible** so developers can tell what's happening by looking at the code structure.
+
+**Number of stages varies by application needs:**
+- **Most common (2 stages)**: Configuration stage loads settings → Application stage uses configuration
+- **Second most common (1 stage)**: Single composition root with separate Integrations interface (no pipeline needed)
+- **Less common (3+ stages)**: Multiple sequential work stages (e.g., Bootstrap → Plugin Discovery → Application)
+- **React/UI apps**: Typically single stage (event-driven, no sequential work at initialization)
+
+The examples below demonstrate the three-stage pattern to show how staging scales, but most applications need fewer stages.
 
 #### The Core Principle: Syntactic Visibility
 
@@ -217,11 +225,19 @@ The pattern generalizes to any number of stages. Each stage follows the same str
 2. **Call service method** - does work, returns result
 3. **Pass result to next stage** - result becomes input to next composition root
 
-**Common stages:**
+**Typical staging scenarios:**
+
+**Most applications (1-2 stages):**
+- **Single stage**: `ApplicationDependencies(integrations)` - all dependencies available at startup
+- **Two stages**: `Bootstrap` loads config → `Application` uses config
+
+**Less common (3+ stages):**
 - **Stage 1: Integrations** - Everything that crosses the application boundary (files, clock, network, args). Interface-based to swap prod vs test implementations.
 - **Stage 2: Bootstrap** - Parse inputs, load configuration from external sources
 - **Stage 3: Application** - Wire domain objects and business logic using integrations + configuration
 - **Additional stages** as needed: service discovery, dynamic feature loading, plugin initialization, authentication, authorization, etc.
+
+Most applications don't need more than two stages. Add stages only when you have sequential work at initialization where each stage's output is required for the next stage's wiring.
 
 **The repeating pattern per stage:**
 ```kotlin
@@ -237,9 +253,9 @@ val nextResult = nextStageDeps.service.doWork()             // WORK
 
 Each stage's composition root (`XyzDependencies`) does pure wiring, and each service class exposes methods for doing work. The pattern scales to any number of stages without changing structure.
 
-#### Staged Dependency Injection with Concurrent Systems
+#### Composition Pipeline Pattern with Concurrent Systems
 
-The staged dependency injection pattern extends naturally to concurrent/async systems. The key insight: **most code lives in concurrent land using `suspend` functions, with `runBlocking` appearing only at the entry point boundary**.
+The composition pipeline pattern extends naturally to concurrent/async systems. The key insight: **most code lives in concurrent land using `suspend` functions, with `runBlocking` appearing only at the entry point boundary**.
 
 **Architecture Pattern:**
 
@@ -1060,7 +1076,7 @@ The pattern: start deep, let complexity guide you. When tests require complicate
 
 Decision authority remains with humans: you decide testing strategy, what to test, when to refactor. AI executes: the mechanical refactoring work, intermediate steps, implementation details. AI has discretion in how to implement, but you control the architectural trade-offs. The benefit: simpler initial code, refactor when complexity justifies it rather than preemptively defending against hypothetical future requirements.
 
-"What's the connection to the Reader monad?" (Side note, not the primary point) The staged dependency injection pattern mirrors the Reader monad from functional programming. Reader threads an environment through computations with signature `Reader env a = env -> a` (environment to result). In OOP, this becomes dependencies-in-constructor, behavior-as-methods: the class takes environment (integrations, configuration) and exposes behavior (runner). The companion factory `fromConfiguration(integrations: Integrations, config: Configuration): Runnable` has the Reader signature - it's a function from environments to results. Each stage is a Reader computation: takes its environment, produces the next stage. The composition is explicit (manual chaining through constructors) rather than implicit (Haskell's do-notation), but the structure is the same.
+"What's the connection to the Reader monad?" (Side note, not the primary point) The composition pipeline pattern mirrors the Reader monad from functional programming. Reader threads an environment through computations with signature `Reader env a = env -> a` (environment to result). In OOP, this becomes dependencies-in-constructor, behavior-as-methods: the class takes environment (integrations, configuration) and exposes behavior (runner). The companion factory `fromConfiguration(integrations: Integrations, config: Configuration): Runnable` has the Reader signature - it's a function from environments to results. Each stage is a Reader computation: takes its environment, produces the next stage. The composition is explicit (manual chaining through constructors) rather than implicit (Haskell's do-notation), but the structure is the same.
 
 ## Pushback
 This rule assumes testability and flexibility are worth the cost of additional interfaces and explicit wiring. It values being able to test each class in isolation over the simplicity of direct instantiation. It assumes you'll benefit from swapping implementations (even if just test vs production) more than you'll suffer from the indirection.

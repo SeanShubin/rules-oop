@@ -200,9 +200,9 @@ static class Tester {
 - `messageDigestForDirectory(path)`
 - `getEvents()`
 
-### Kotlin Full Application Test (Deep Testing with Staged DI)
+### Kotlin Full Application Test (Deep Testing with Composition Pipeline)
 
-This example demonstrates how the Test Orchestrator pattern integrates with Staged Dependency Injection to enable deep testing - testing the entire application with fake integrations at the boundary.
+This example demonstrates how the Test Orchestrator pattern integrates with the Composition Pipeline pattern to enable deep testing - testing the entire application with fake integrations at the boundary.
 
 ```kotlin
 class ApplicationTester(
@@ -349,7 +349,7 @@ fun `returns exit code on network error`() {
 - `getRetryIntervals()` → List<Long>
 - `getUploadAttemptCount()` → Int
 
-**Integration with Staged Dependency Injection:**
+**Integration with Composition Pipeline Pattern:**
 
 The ApplicationTester takes a function reference, making it reusable for any function with signature `(Integrations) -> Int`:
 
