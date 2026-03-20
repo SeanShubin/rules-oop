@@ -6,6 +6,13 @@ This directory contains architectural and code quality rules designed to prevent
 - See [claude-code-setup.md](claude-code-setup.md) for symlink-based setup (quick start)
 - See [creating-a-plugin.md](creating-a-plugin.md) for plugin-based distribution (no symlinks needed, includes sync script for maintenance)
 
+**Plugin Quick Reference:**
+```bash
+./sync-plugin.sh     # Sync rules to plugin, check if reinstall needed (manual control)
+./verify-plugin.sh   # Check if installed plugin matches source (no changes)
+./update-plugin.sh   # Check, auto-install if needed, verify (full automation)
+```
+
 ## The Rules
 
 1. **[Coupling and Cohesion](coupling-and-cohesion.md)** - Group code that changes together; separate code that changes for different reasons

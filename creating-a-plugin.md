@@ -203,6 +203,30 @@ chmod +x sync-plugin.sh
 The script handles:
 - Copying all rule files to the plugin
 - Validating the plugin structure
+- Checking if installed plugin matches source
+- Telling you if reinstall is needed
+
+**Additional scripts:**
+
+`verify-plugin.sh` - Check only (no changes):
+```bash
+./verify-plugin.sh
+```
+
+This shows differences between installed plugin and source without syncing. Safe for CI/CD pipelines.
+
+`install-plugin-local.sh` - Install from local:
+```bash
+./install-plugin-local.sh
+```
+
+Installs plugin from local directory, checks if out of date first, then verifies. Perfect for daily workflow after syncing.
+
+**Which script to use:**
+- **Daily development**: `./sync-plugin.sh && ./install-plugin-local.sh`
+- **Just checking status**: `./verify-plugin.sh` (read-only)
+- **Before releasing**: `./install-plugin-github.sh` (test what users will get)
+- **CI/CD validation**: `./verify-plugin.sh` (exit code indicates status)
 
 ## Step 8: Push to GitHub
 
@@ -270,29 +294,115 @@ claude plugin list
 
 After initial setup, use this workflow to update the plugin:
 
+### Option A: Full Automation (Recommended)
+
+1. **Edit rules** in the main repository (e.g., `coupling-and-cohesion.md`)
+2. **Sync and install**: `./sync-plugin.sh && ./install-plugin-local.sh`
+3. **Commit changes** to git
+4. **Push to GitHub** - users get updates on next marketplace refresh
+
+### Option B: Manual Control
+
 1. **Edit rules** in the main repository (e.g., `coupling-and-cohesion.md`)
 2. **Run sync script**: `./sync-plugin.sh`
-3. **Test locally** if needed
-4. **Commit changes** to git
-5. **Push to GitHub** - users get updates on next marketplace refresh
+3. **Review differences** if shown
+4. **Install if needed**: `claude plugin install code-quality@seanshubin`
+5. **Verify**: `./verify-plugin.sh`
+6. **Commit changes** to git
+7. **Push to GitHub**
 
-The sync script ensures the plugin stays in sync with your rule files automatically.
+### Option C: Full Release Workflow (Recommended for Teams)
+
+1. **Make changes** locally
+2. **Sync to plugin**: `./sync-plugin.sh`
+3. **Test locally**: `./install-plugin-local.sh`
+4. **Commit**: `git add . && git commit -m "Update rules"`
+5. **Test GitHub before push**: `./install-plugin-github.sh` (should differ)
+6. **Push**: `git push`
+7. **Verify release**: `./install-plugin-github.sh` (should match)
+8. **Restore local dev**: `./install-plugin-local.sh`
+
+### Daily Check
+
+Just run:
+```bash
+./install-plugin-local.sh
+```
+
+This ensures your installed plugin is always up to date with your source.
+
+### Testing GitHub Distribution
+
+Before releasing to your team, verify what they'll actually get:
+
+```bash
+./install-plugin-github.sh
+```
+
+This script:
+1. **Warns about uncommitted/unpushed changes** - GitHub won't have them
+2. **Removes local marketplace** - Temporarily switches to GitHub
+3. **Installs from GitHub** - Exactly like your users will
+4. **Compares to local source** - Shows any differences
+5. **Restores local marketplace** - Back to development mode
+
+**Example output:**
+```
+⚠️  WARNING: You have unpushed commits
+The GitHub version will not include these commits
+
+  c1d503b Update coupling rule (not pushed)
+
+Continue anyway? (y/n)
+```
+
+**Use this before releases:**
+```bash
+# 1. Make your changes
+vim coupling-and-cohesion.md
+./sync-plugin.sh
+
+# 2. Test locally
+./install-plugin-local.sh
+
+# 3. Commit (but don't push yet)
+git add . && git commit -m "Update coupling rule"
+
+# 4. Test what's currently on GitHub
+./install-plugin-github.sh
+# Should show differences (your new commit isn't pushed)
+
+# 5. Push to release
+git push
+
+# 6. Verify users will get your changes
+./install-plugin-github.sh
+# Should now match!
+```
 
 ## Quick Start Summary
 
 For those who already have the structure:
 
 ```bash
-# Sync rules to plugin
-./sync-plugin.sh
+# Edit rules
+vim coupling-and-cohesion.md
 
-# Test locally
-claude plugin marketplace add /Users/seashubi/github.com/SeanShubin/rules-oop
-claude plugin install code-quality@seanshubin
+# Sync and auto-install
+./sync-plugin.sh && ./install-plugin-local.sh
 
 # Push to GitHub for distribution
 git add . && git commit -m "Update rules" && git push
 ```
+
+**Four helper scripts:**
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| `sync-plugin.sh` | Sync rules to plugin, check status | After editing rules |
+| `verify-plugin.sh` | Check only, no changes | Just checking status, CI/CD |
+| `install-plugin-local.sh` | Install from local directory | Daily workflow, after syncing |
+| `install-plugin-github.sh` | Install from GitHub | Before releasing, verify what users get |
 
 Users install with:
 
