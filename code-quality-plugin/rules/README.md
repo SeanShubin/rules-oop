@@ -8,9 +8,10 @@ This directory contains architectural and code quality rules designed to prevent
 
 **Plugin Quick Reference:**
 ```bash
-./sync-plugin.sh     # Sync rules to plugin, check if reinstall needed (manual control)
-./verify-plugin.sh   # Check if installed plugin matches source (no changes)
-./update-plugin.sh   # Check, auto-install if needed, verify (full automation)
+./sync-plugin.sh             # Sync rules to plugin, check if reinstall needed
+./verify-plugin.sh           # Check if installed plugin matches source (read-only)
+./install-plugin-local.sh    # Install from local directory (daily workflow)
+./install-plugin-github.sh   # Install from GitHub (test distribution before release)
 ```
 
 ## The Rules
