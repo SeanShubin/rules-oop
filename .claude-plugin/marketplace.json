@@ -1,0 +1,17 @@
+{
+  "name": "seanshubin",
+  "owner": {
+    "name": "Sean Shubin"
+  },
+  "metadata": {
+    "description": "Sean Shubin's code quality rules (OOP, ECS, and more)"
+  },
+  "plugins": [
+    {
+      "name": "code-quality",
+      "source": "./code-quality-plugin",
+      "description": "Code quality rules for maintainable software (OOP, ECS, and more)",
+      "version": "1.0.0"
+    }
+  ]
+}

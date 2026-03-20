@@ -4,7 +4,7 @@ This directory contains architectural and code quality rules designed to prevent
 
 **Using with Claude Code?**
 - See [claude-code-setup.md](claude-code-setup.md) for symlink-based setup (quick start)
-- See [creating-a-plugin.md](creating-a-plugin.md) for plugin-based distribution (no symlinks needed, includes sync script for maintenance)
+- See [creating-a-plugin.md](creating-a-plugin.md) for plugin-based distribution (no symlinks needed)
 
 ## The Rules
 

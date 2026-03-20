@@ -1,0 +1,1084 @@
+# Dependency Injection
+
+## Concept
+Classes that delegate to behavioral dependencies should depend on abstractions (interfaces), not concrete implementations. This allows different implementations to be substituted without changing the delegating class, enabling testing with fakes and production with real implementations. Composition roots wire concrete implementations to abstractions at application boundaries, isolating construction decisions from business logic.
+
+## Implementation
+- Classes depend on interfaces for behavioral dependencies:
+    - I/O operations: databases, file systems, networks, mail services
+    - Non-deterministic behavior: random number generators, clocks, UUID generators
+    - External systems: payment gateways, APIs, service discovery
+    - Anything you need to fake or mock in tests
+- Classes can directly use concrete types for:
+    - Pure data: domain objects, value objects, entities, DTOs
+    - Deterministic transformations: pure functions, utilities
+    - Configuration: paths, durations, connection strings
+    - Language primitives: strings, numbers, collections
+- All dependencies (both interfaces and concrete values) must be constructor-injected
+- Composition root classes wire everything together:
+    - Create concrete implementations
+    - Inject them into classes that need them
+    - No business logic in composition roots
+- Factories create instances but must themselves be injected through composition roots
+- Domain objects know nothing about implementation details (databases, networks, frameworks); implementation classes know about domain objects
+
+### Composition Pipeline Pattern
+
+When dependencies are not available at compile time (configuration files, service discovery, runtime initialization), break composition into multiple stages. The key principle: **make work vs wiring syntactically visible** so developers can tell what's happening by looking at the code structure.
+
+**Number of stages varies by application needs:**
+- **Most common (2 stages)**: Configuration stage loads settings → Application stage uses configuration
+- **Second most common (1 stage)**: Single composition root with separate Integrations interface (no pipeline needed)
+- **Less common (3+ stages)**: Multiple sequential work stages (e.g., Bootstrap → Plugin Discovery → Application)
+- **React/UI apps**: Typically single stage (event-driven, no sequential work at initialization)
+
+The examples below demonstrate the three-stage pattern to show how staging scales, but most applications need fewer stages.
+
+#### The Core Principle: Syntactic Visibility
+
+**Constructors wire references together (no effects). Methods do work (effects happen here).**
+
+This makes staging explicit and prevents hidden side effects. When you see a constructor call, nothing happens except wiring. When you see a method call, you know work is being done.
+
+#### Two Types of Classes
+
+**1. Composition Roots** - Classes ending in "Dependencies"
+- Only contain constructor calls (wiring)
+- No method calls that do work
+- No logic, conditionals, loops, or calculations
+- Pure dependency injection
+
+**2. Service Classes** - Classes that do work
+- Have methods that perform operations
+- Constructor-inject all dependencies
+- Methods contain the logic
+
+#### The Universal Pattern
+
+```kotlin
+// Service class - does work via methods
+class Bootstrap(
+    private val integrations: Integrations,
+    private val configurationLoader: ConfigurationLoader
+) {
+    private val argsParser = ArgsParser
+
+    fun loadConfiguration(): Configuration {  // Work happens in methods
+        val configPath = argsParser.parseConfigPath(integrations.commandLineArgs)
+        return configurationLoader.load(configPath)
+    }
+}
+
+// Composition root - only wiring
+class BootstrapDependencies(
+    integrations: Integrations
+) {
+    private val files = integrations.files
+    private val configurationLoader = ConfigurationLoader(files)
+
+    val bootstrap: Bootstrap = Bootstrap(integrations, configurationLoader)  // Only constructor calls
+}
+
+// Composition root - only wiring
+class SchemaDependencies(
+    integrations: Integrations,
+    configuration: Configuration
+) {
+    private val files = integrations.files
+    private val csvPath = configuration.csvPath
+
+    val schemaLoader: SchemaLoader = SchemaLoader(files, csvPath)
+}
+
+// Composition root - only wiring
+class ApplicationDependencies(
+    integrations: Integrations,
+    configuration: Configuration,
+    schema: Schema
+) {
+    private val files = integrations.files
+    private val emitLine = integrations.emitLine
+    private val exitCode = integrations.exitCode
+
+    private val csvPath = configuration.csvPath
+    private val columnsToInclude = configuration.columnsToInclude
+    private val columnType = configuration.columnType
+    private val outputFormat = configuration.outputFormat
+
+    private val csvReader = CsvReader(files)
+
+    val reportGenerator: ReportGenerator = ReportGenerator(
+        csvReader,
+        csvPath,
+        columnsToInclude,
+        columnType,
+        outputFormat,
+        schema,
+        emitLine,
+        exitCode
+    )
+}
+
+// Entry point orchestrates: wire -> work -> wire -> work
+fun runApplication(integrations: Integrations) {
+    // Stage 1: Bootstrap
+    val bootstrapDeps = BootstrapDependencies(integrations)  // wiring
+    val configuration = bootstrapDeps.bootstrap.loadConfiguration()  // work
+
+    // Stage 2: Manifest Building
+    val manifestDeps = ManifestDependencies(integrations, configuration)  // wiring
+    val manifest = manifestDeps.manifestBuilder.buildManifest()  // work
+
+    // Stage 3: Application
+    val appDeps = ApplicationDependencies(integrations, configuration, manifest)  // wiring
+    appDeps.manifestUploader.upload()  // work
+}
+```
+
+**What makes this pattern work:**
+- You can **see** where work happens (method calls like `.loadConfiguration()`, `.loadSchema()`, `.generate()`)
+- You can **see** where wiring happens (constructors like `BootstrapDependencies(...)`, `SchemaDependencies(...)`)
+- The staging sequence is **explicit** in the entry point, not buried in constructor calls
+- Each `XyzDependencies` class is **pure wiring** - easy to verify, nothing to test
+- **Three stages** demonstrate the pattern scales to any number of stages
+- **Later stages can depend on multiple earlier results** (ApplicationDependencies takes integrations, configuration, AND schema)
+
+#### Why Constructors Must Not Do Work
+
+**The problem with work in constructors:**
+```kotlin
+// ❌ BAD - Constructor does I/O, hidden from caller
+class Bootstrap(integrations: Integrations) {
+    val configuration = loadConfigFromDisk(integrations.files)  // Hidden I/O!
+}
+
+// Caller can't tell work is happening
+val bootstrap = Bootstrap(integrations)  // Looks like wiring, actually does I/O
+```
+
+**The solution - work in methods:**
+```kotlin
+// ✅ GOOD - Constructor only wires
+class Bootstrap(private val integrations: Integrations) {
+    fun loadConfiguration(): Configuration {  // Work is explicit
+        return loadConfigFromDisk(integrations.files)
+    }
+}
+
+// Caller can see work happening
+val bootstrap = Bootstrap(integrations)           // Wiring
+val config = bootstrap.loadConfiguration()       // Work - syntactically obvious
+```
+
+**Why this matters:**
+- **Transparency**: You can trace execution by looking at method calls
+- **Testability**: Composition roots with only constructors need no tests
+- **Debugging**: Stack traces show method boundaries where work happens
+- **Reasoning**: No hidden surprises - constructors always just wire
+
+#### Scaling the Pattern
+
+**If Bootstrap needs more dependencies:**
+```kotlin
+class Bootstrap(
+    private val integrations: Integrations,
+    private val validator: ArgsValidator,    // New dependency
+    private val defaults: ConfigDefaults      // Another dependency
+) {
+    fun loadConfiguration(): Configuration { /* ... */ }
+}
+
+class BootstrapDependencies(integrations: Integrations) {
+    private val validator = ArgsValidator()
+    private val defaults = ProductionDefaults
+    val bootstrap = Bootstrap(integrations, validator, defaults)  // Still just wiring
+}
+```
+
+Constructor injection scales to any number of dependencies. Composition roots stay pure wiring.
+
+**If you need more stages:**
+```kotlin
+fun execute(args: Array<String>): Int {
+    val integrations = ProductionIntegrations(args)
+
+    val bootstrapDeps = BootstrapDependencies(integrations)
+    val configuration = bootstrapDeps.bootstrap.loadConfiguration()
+
+    val discoveryDeps = ServiceDiscoveryDependencies(integrations, configuration)
+    val services = discoveryDeps.serviceDiscovery.discover()
+
+    val appDeps = ApplicationDependencies(integrations, configuration, services)
+    appDeps.runner.run()
+
+    return integrations.exitCode.value
+}
+```
+
+The pattern is the same: wire -> work -> wire -> work. EntryPoint orchestrates explicitly.
+
+#### Common Staging Pattern
+
+The pattern generalizes to any number of stages. Each stage follows the same structure:
+
+1. **Create composition root** (XyzDependencies) - wires service class with constructor-injected dependencies
+2. **Call service method** - does work, returns result
+3. **Pass result to next stage** - result becomes input to next composition root
+
+**Typical staging scenarios:**
+
+**Most applications (1-2 stages):**
+- **Single stage**: `ApplicationDependencies(integrations)` - all dependencies available at startup
+- **Two stages**: `Bootstrap` loads config → `Application` uses config
+
+**Less common (3+ stages):**
+- **Stage 1: Integrations** - Everything that crosses the application boundary (files, clock, network, args). Interface-based to swap prod vs test implementations.
+- **Stage 2: Bootstrap** - Parse inputs, load configuration from external sources
+- **Stage 3: Application** - Wire domain objects and business logic using integrations + configuration
+- **Additional stages** as needed: service discovery, dynamic feature loading, plugin initialization, authentication, authorization, etc.
+
+Most applications don't need more than two stages. Add stages only when you have sequential work at initialization where each stage's output is required for the next stage's wiring.
+
+**The repeating pattern per stage:**
+```kotlin
+// Stage N
+val stageDeps = StageDependencies(inputsFromPreviousStage)  // WIRING
+val result = stageDeps.service.doWork()                     // WORK
+
+// Stage N+1
+val nextStageDeps = NextStageDependencies(inputsFromPreviousStage, result)  // WIRING
+val nextResult = nextStageDeps.service.doWork()             // WORK
+// ... continue pattern
+```
+
+Each stage's composition root (`XyzDependencies`) does pure wiring, and each service class exposes methods for doing work. The pattern scales to any number of stages without changing structure.
+
+#### Composition Pipeline Pattern with Concurrent Systems
+
+The composition pipeline pattern extends naturally to concurrent/async systems. The key insight: **most code lives in concurrent land using `suspend` functions, with `runBlocking` appearing only at the entry point boundary**.
+
+**Architecture Pattern:**
+
+```kotlin
+// Entry point - bridges from sequential to concurrent land
+fun main(args: Array<String>) {
+    val integrations: Integrations = ProductionIntegrations(args)
+    val exitCode = runBlocking {  // ← Enter concurrent land once
+        execute(integrations)
+    }
+    exitProcess(exitCode)
+}
+
+// Exception handler - suspend function
+suspend fun execute(integrations: Integrations): Int {
+    return try {
+        runApplication(integrations)
+        ExitCodes.SUCCESS
+    } catch (e: ApplicationException) {
+        System.err.println("Error: ${e.message}")
+        e.exitCode
+    } catch (e: Exception) {
+        System.err.println("Unexpected error: ${e.message}")
+        e.printStackTrace()
+        ExitCodes.GENERAL_ERROR
+    }
+}
+
+// Pure happy path - suspend function
+suspend fun runApplication(integrations: Integrations) {
+    val bootstrapDeps = BootstrapDependencies(integrations)
+    val configuration = bootstrapDeps.bootstrap.loadConfiguration()  // suspend fun
+
+    val manifestDeps = ManifestDependencies(integrations, configuration)
+    val manifest = manifestDeps.manifestBuilder.buildManifest()  // suspend fun
+
+    val appDeps = ApplicationDependencies(integrations, configuration, manifest)
+    appDeps.manifestUploader.upload()  // suspend fun
+}
+
+// Integrations for coroutines - uses delay instead of sleep
+interface Integrations {
+    val commandLineArgs: Array<String>
+    val files: FilesContract
+    val messageDigest: MessageDigestContract
+    val httpClient: HttpClientContract
+    val delay: suspend (Long) -> Unit  // ← suspend function for non-blocking delay
+    val clock: () -> Instant
+    val emitLine: (String) -> Unit
+    val exitCode: ExitCode
+}
+
+class ProductionIntegrations(
+    override val commandLineArgs: Array<String>
+) : Integrations {
+    override val files: FilesContract = FilesDelegate.defaultInstance()
+    override val messageDigest: MessageDigestContract = MessageDigestDelegate(MessageDigest.getInstance("SHA-256"))
+    override val httpClient: HttpClientContract = HttpClientDelegate.defaultInstance()
+    override val delay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) }  // ← Coroutines delay
+    override val clock: () -> Instant = Instant::now
+    override val emitLine: (String) -> Unit = ::println
+    override val exitCode: ExitCode = ExitCodeImpl()
+}
+```
+
+**Key Points:**
+
+1. **`runBlocking` appears only at boundaries:**
+   - Entry point (`main()` function) - wraps call to execute()
+   - Test functions (`@Test fun myTest() = runBlocking { ... }`)
+   - ApplicationTester.runApplication() - bridges blocking test to suspend function
+   - Rare cases bridging back to blocking code
+
+2. **Most code uses `suspend` functions:**
+   - Exception handler: `suspend fun execute(integrations: Integrations): Int`
+   - Happy path: `suspend fun runApplication(integrations: Integrations)`
+   - Business logic: `suspend fun processOrder(order: Order): Result`
+   - I/O operations: `suspend fun Database.query(sql: String): ResultSet`
+   - All injected interfaces can have suspend methods
+
+3. **Constructor injection still applies:**
+   - Dependencies are still constructor-injected
+   - Composition roots still do pure wiring (not suspend)
+   - Service classes still expose methods for work (now suspend)
+   - The only difference: methods are `suspend fun` instead of regular functions
+
+4. **Wiring vs Work separation is preserved:**
+   - Constructors still only wire (never `suspend`)
+   - Methods do work (now with `suspend`)
+   - Composition roots remain pure (no suspend, no work)
+
+5. **Exception handling pattern works with coroutines:**
+   - runApplication() = pure happy path (suspend, returns Unit)
+   - execute() = exception wrapper (suspend, returns Int)
+   - Same separation as blocking version, just with suspend
+
+**Visualization:**
+
+```
+Sequential World (main)
+      ↓
+  runBlocking { ... }                  ← Enter concurrent land ONCE
+      ↓
+  execute(integrations)                ← Exception wrapper (suspend fun)
+      ↓
+  runApplication(integrations)         ← Happy path (suspend fun)
+      ↓
+  [All staging and work]               ← Everything uses suspend functions
+  - BootstrapDependencies creation     (wiring, not suspend)
+  - bootstrap.loadConfiguration()      (suspend fun)
+  - ManifestDependencies creation      (wiring, not suspend)
+  - manifestBuilder.buildManifest()    (suspend fun)
+  - ApplicationDependencies creation   (wiring, not suspend)
+  - manifestUploader.upload()          (suspend fun)
+      ↓
+  [Returns exit code]                  ← Still in concurrent land
+      ↓
+  exitProcess(exitCode)                ← Back to sequential world
+```
+
+**Why This Works:**
+
+- **Minimal blocking overhead** - Only one `runBlocking` at the entry point
+- **Clean separation** - execute() wraps runApplication() with exception handling
+- **Natural concurrency** - All I/O can run concurrently by default
+- **Structured concurrency** - Cancellation propagates correctly through the chain
+- **Testable** - ApplicationTester tests execute() which includes exception handling
+
+**Testing Concurrent Code:**
+
+```kotlin
+class ApplicationTester(
+    private val applicationRunner: suspend (Integrations) -> Int
+) {
+    fun runApplication(configFileName: String): Int {
+        val exitCode = ExitCodeImpl()
+        val testIntegrations = TestIntegrations(
+            commandLineArgs = arrayOf(configFileName),
+            files = fakeFiles,
+            messageDigest = fakeMessageDigest,
+            httpClient = fakeHttpClient,
+            delay = { millis -> retryIntervals.add(millis) },  // ← delay, not sleep
+            clock = fakeClock,
+            emitLine = { line -> capturedOutput.add(line) },
+            exitCode = exitCode
+        )
+        return runBlocking {  // ← Bridge to suspend world
+            applicationRunner(testIntegrations)
+        }
+    }
+}
+
+@Test
+fun `test application with coroutines`() {
+    val tester = ApplicationTester(::execute)  // ← execute is suspend fun
+    tester.setupConfigFile(...)
+
+    val exitCode = tester.runApplication("config.txt")
+
+    assertEquals(0, exitCode)
+}
+```
+
+**Comparison with Blocking Code:**
+
+| Aspect | Blocking (Traditional) | Concurrent (Suspend) |
+|--------|----------------------|---------------------|
+| Entry point | `fun main(args: Array<String>)` | `fun main(args: Array<String>)` with `runBlocking { execute(...) }` |
+| Exception handler | `fun execute(integrations): Int` | `suspend fun execute(integrations): Int` |
+| Happy path | `fun runApplication(integrations)` | `suspend fun runApplication(integrations)` |
+| Service methods | `fun upload()` | `suspend fun upload()` |
+| I/O interfaces | `fun send(data): Response` | `suspend fun send(data): Response` |
+| Sleep/Delay | `sleep: (Long) -> Unit` | `delay: suspend (Long) -> Unit` |
+| Composition roots | Same (wiring only, no work) | Same (wiring only, no work) |
+| ApplicationTester | `(Integrations) -> Int` | `suspend (Integrations) -> Int` |
+| Where you live | Sequential land | Concurrent land (after runBlocking) |
+
+**The Pattern:** Sequential code exists only at application lifecycle boundaries (startup/shutdown). Everything inside lives in concurrent land using `suspend` functions. The execute()/runApplication() separation pattern works identically in both blocking and concurrent contexts - only the execution context changes from sequential to concurrent.
+
+#### Coroutine Context as Ambient Dependency
+
+Using coroutines creates an apparent tension with dependency injection principles: the `CoroutineContext` (dispatcher, job, exception handler, etc.) becomes **implicitly available** to all suspend functions through the language runtime. This might seem to violate the rule that dependencies must be explicitly injected through constructors.
+
+**However, this ambient dependency is acceptable because it satisfies the core goals of dependency injection through language-level mechanisms:**
+
+**1. Explicit in the Type System**
+```kotlin
+// The `suspend` keyword declares the dependency on coroutine context
+suspend fun loadConfiguration(): Configuration  // ← Explicit in signature
+
+// Compare to hidden global dependency:
+fun loadConfiguration(): Configuration {
+    val context = GlobalContext.get()  // ← Hidden, not in signature
+}
+```
+
+The `suspend` keyword is a **type-level declaration** that this function depends on a coroutine context. It's visible at every call site, unlike truly hidden global state.
+
+**2. Control at Boundaries**
+```kotlin
+fun main(args: Array<String>) = runBlocking {  // ← You inject the context here
+    val integrations = ProductionIntegrations(args)
+    // Everything inside uses the context from runBlocking
+}
+
+@Test
+fun test() = runTest {  // ← Test injects different context (TestDispatchers, virtual time)
+    val integrations = TestIntegrations(testArgs)
+    // Test context with controlled time, thread behavior
+}
+```
+
+You control the coroutine context at application boundaries (`runBlocking`, `runTest`), exactly like staged dependency injection. The context is injected once at the root and flows through automatically.
+
+**3. Tests Can Substitute**
+```kotlin
+@Test
+fun test() = runTest {  // ← Substitutes TestCoroutineScheduler, virtual time
+    val tester = Tester(integrations)
+    tester.doWork()  // Uses test context automatically
+    advanceTimeBy(1000)  // Can control time
+}
+```
+
+Tests substitute the coroutine context via `runTest`, achieving the same testability as explicit constructor injection. You can control concurrency, time, and error handling through the test context.
+
+**4. Fighting the Pattern Makes Code Worse**
+```kotlin
+// ❌ BAD - Manually passing CoroutineScope everywhere
+class Bootstrap(
+    private val integrations: Integrations,
+    private val coroutineScope: CoroutineScope  // Fighting the language
+) {
+    fun loadConfiguration(): Configuration = runBlocking(coroutineScope.coroutineContext) {
+        // Now you're manually bridging contexts everywhere
+    }
+}
+```
+
+Explicitly injecting `CoroutineScope` or `CoroutineContext` through constructors fights Kotlin's design. The language provides `suspend` functions specifically to make concurrency composable without explicit context passing. Forcing constructor injection here adds ceremony without improving testability or clarity.
+
+**Why This Exception Is Valid:**
+
+The dependency injection rule's real goals are:
+- **Testability** - Can you substitute implementations? ✅ Yes, via `runTest`
+- **Explicitness** - Can you tell what a function depends on? ✅ Yes, `suspend` keyword
+- **Control** - Can you control behavior at boundaries? ✅ Yes, at `runBlocking`/`runTest`
+
+Coroutine contexts achieve all three goals through language-level mechanisms rather than constructor parameters. This is similar to how the rule allows **pure data types** to be concrete (not behind interfaces) - sometimes the language provides patterns that satisfy the rule's intent more idiomatically than strict constructor injection.
+
+**The principle:** When language features provide equivalent testability, explicitness, and control through different mechanisms, prefer the idiomatic pattern over forcing constructor injection.
+
+**Where Coroutine Contexts Should Be Created:**
+
+Since the coroutine context is an ambient dependency controlled at boundaries, it's generally **incorrect** to create new contexts or hardcode dispatchers anywhere except entry points:
+
+**✅ Correct - Context at entry points only:**
+```kotlin
+// Entry point
+fun main(args: Array<String>) = runBlocking {  // ← Only here
+    val integrations = ProductionIntegrations(args)
+    val deps = ApplicationDependencies(integrations)
+    deps.runner.run()  // Everything else is suspend functions
+}
+
+// Tests
+@Test
+fun test() = runTest {  // ← Or here
+    val integrations = TestIntegrations(testArgs)
+    // ...
+}
+```
+
+**❌ Incorrect - New contexts deep in code:**
+```kotlin
+class DataProcessor(private val database: Database) {
+    suspend fun process() {
+        val data = database.query("...")
+
+        // ❌ BAD - Creates new blocking context, ignores injected context
+        runBlocking(Dispatchers.Default) {
+            heavyComputation(data)
+        }
+        // Lost control, tests can't control this execution
+    }
+}
+
+class ImageProcessor {
+    suspend fun processImage(image: Image) {
+        // ❌ BAD - Hardcoded dispatcher
+        withContext(Dispatchers.IO) {
+            // I/O work
+        }
+        // Tests can't substitute, infrastructure decision hardcoded
+    }
+}
+```
+
+**✅ Correct - Inject dispatchers when needed:**
+```kotlin
+class ImageProcessor(
+    private val ioDispatcher: CoroutineDispatcher,
+    private val computationDispatcher: CoroutineDispatcher
+) {
+    suspend fun processImage(image: Image): ProcessedImage {
+        val imageData = withContext(ioDispatcher) {
+            readImageFromDisk(image.path)
+        }
+
+        return withContext(computationDispatcher) {
+            applyFilters(imageData)
+        }
+    }
+}
+
+// In Integrations - dispatchers are boundary crossings
+interface Integrations {
+    val ioDispatcher: CoroutineDispatcher
+    val computationDispatcher: CoroutineDispatcher
+}
+
+class ProductionIntegrations(args: Array<String>) : Integrations {
+    override val ioDispatcher = Dispatchers.IO
+    override val computationDispatcher = Dispatchers.Default
+}
+
+class TestIntegrations(args: Array<String>) : Integrations {
+    override val ioDispatcher = StandardTestDispatcher()
+    override val computationDispatcher = StandardTestDispatcher()
+}
+```
+
+**The Rule:**
+
+- **`runBlocking` only at:** Entry points (`main`), test setup (`@Test`), or rare bridges from concurrent back to blocking
+- **Everywhere else:** Use `suspend` functions and trust the injected context
+- **If you need different dispatchers:** Inject them as dependencies through `Integrations`
+- **Don't hardcode:** `Dispatchers.IO`, `Dispatchers.Default`, or `newSingleThreadContext()` in business logic
+
+**Why this matters:**
+
+Just as you wouldn't `new SqlDatabase()` deep in your code (you'd inject `Database`), you shouldn't hardcode `Dispatchers.Default` or create `runBlocking` contexts deep in your code. This loses the testability and control you gained by injecting the context at the entry point.
+
+**When in doubt:** If you're tempted to use `runBlocking`, `Dispatchers.X`, or create a new `CoroutineScope` deep in your code, ask:
+1. Why doesn't the injected context work?
+2. Should I inject a dispatcher dependency instead?
+3. Am I making tests harder by hardcoding this?
+
+### Exit Code Handling
+
+Exit code is the only value forced by the OS boundary (`System.exit(Int)` / `exitProcess(Int)`). How you track errors internally is an application choice - the exit code just communicates success/failure to the OS.
+
+**The Pattern:**
+
+Exit code belongs in Integrations because it's a boundary concern - it's the application's return value to the OS/shell. This makes it accessible to all stages (Bootstrap, Schema, Application), not just the final stage.
+
+**Implementation:**
+
+```kotlin
+// domain-api
+interface ExitCode {
+    var value: Int
+}
+
+// domain-impl
+class ExitCodeImpl : ExitCode {
+    override var value: Int = 0  // Default to success
+}
+
+// Integrations - complete interface with all boundary crossings
+interface Integrations {
+    val commandLineArgs: Array<String>
+    val files: FilesContract
+    val messageDigest: MessageDigestContract
+    val httpClient: HttpClientContract
+    val sleep: (Long) -> Unit
+    val clock: () -> Instant
+    val emitLine: (String) -> Unit
+    val exitCode: ExitCode
+}
+
+class ProductionIntegrations(
+    override val commandLineArgs: Array<String>
+) : Integrations {
+    override val files: FilesContract = FilesDelegate.defaultInstance()
+    override val messageDigest: MessageDigestContract = MessageDigestDelegate(MessageDigest.getInstance("SHA-256"))
+    override val httpClient: HttpClientContract = HttpClientDelegate.defaultInstance()
+    override val sleep: (Long) -> Unit = Thread::sleep
+    override val clock: () -> Instant = Instant::now
+    override val emitLine: (String) -> Unit = ::println
+    override val exitCode: ExitCode = ExitCodeImpl()
+}
+
+// Service class can set exit code directly
+class ManifestUploader(
+    private val httpClient: HttpClientContract,
+    private val exitCode: ExitCode
+) {
+    fun upload() {
+        val response = httpClient.send(manifest)
+        if (!response.isSuccess) {
+            exitCode.value = ExitCodes.NETWORK_ERROR
+            throw ApplicationException("Upload failed", ExitCodes.NETWORK_ERROR)
+        }
+    }
+}
+
+// Pure happy path - no exception handling
+fun runApplication(integrations: Integrations) {
+    val bootstrapDeps = BootstrapDependencies(integrations)
+    val configuration = bootstrapDeps.bootstrap.loadConfiguration()
+
+    val manifestDeps = ManifestDependencies(integrations, configuration)
+    val manifest = manifestDeps.manifestBuilder.buildManifest()
+
+    val appDeps = ApplicationDependencies(integrations, configuration, manifest)
+    appDeps.manifestUploader.upload()
+}
+
+// Exception handler wraps happy path
+fun execute(integrations: Integrations): Int {
+    return try {
+        runApplication(integrations)
+        ExitCodes.SUCCESS
+    } catch (e: ApplicationException) {
+        System.err.println("Error: ${e.message}")
+        e.exitCode
+    } catch (e: Exception) {
+        System.err.println("Unexpected error: ${e.message}")
+        e.printStackTrace()
+        ExitCodes.GENERAL_ERROR
+    }
+}
+
+// Entry point
+fun main(args: Array<String>) {
+    val integrations: Integrations = ProductionIntegrations(args)
+    val exitCode = execute(integrations)
+    exitProcess(exitCode)
+}
+```
+
+**Pattern: Separate Happy Path from Exception Handling**
+
+The pattern above demonstrates clean separation:
+- `runApplication()` = pure happy path (returns Unit, no exception handling)
+- `execute()` = exception wrapper (returns Int, catches and maps exceptions to exit codes)
+- `main()` = minimal entry point (create integrations, call execute, exit)
+
+Benefits:
+- runApplication() is easy to read - pure business logic with no error handling noise
+- execute() is testable through ApplicationTester (pass `::execute` as function reference)
+- Services can set exitCode.value directly OR throw exceptions - both mechanisms work
+- Main is minimal - just 3 lines of logic
+
+**Why in Integrations, not ApplicationDependencies?**
+
+1. **Exit code is a boundary concern** - It goes to the OS, so it belongs with other boundary crossings
+2. **Any stage might need to set it** - Bootstrap might fail loading config (exit code 1), Schema might fail validation (exit code 2), Application might fail processing (exit code 3)
+3. **ApplicationDependencies only exists in final stage** - Earlier stages can't access it if it's there
+
+**Error Representation is Separate:**
+
+Exit code (Int) is forced by the OS boundary. How you represent errors internally is an application choice:
+- **Exceptions** - Service methods throw, entry point catches and sets exit code
+- **Result types** - Service methods return `Result<T>`, entry point maps to exit code
+- **Error messages** - Service methods set error strings, entry point decides exit code
+- **Sealed classes** - Service methods return typed errors, entry point maps to exit codes
+
+The exit code mechanism is independent of your error handling strategy. You can add exception handling, Result types, or error messages later without changing the basic exit code structure.
+
+**Testing:**
+
+Test orchestrators take a function reference and expose exit codes for verification:
+
+```kotlin
+class ApplicationTester(
+    private val applicationRunner: (Integrations) -> Int  // ← Takes function reference
+) {
+    fun runApplication(configFileName: String): Int {
+        val exitCode = ExitCodeImpl()
+        val testIntegrations = TestIntegrations(
+            commandLineArgs = arrayOf(configFileName),
+            files = fakeFiles,
+            messageDigest = fakeMessageDigest,
+            httpClient = fakeHttpClient,
+            sleep = { millis -> retryIntervals.add(millis) },
+            clock = fakeClock,
+            emitLine = { line -> capturedOutput.add(line) },
+            exitCode = exitCode
+        )
+        return applicationRunner(testIntegrations)  // ← Calls injected function
+    }
+}
+
+@Test
+fun `returns exit code 0 on success`() {
+    val tester = ApplicationTester(::execute)  // ← Pass execute function
+    tester.setupValidData()
+
+    val exitCode = tester.runApplication("config.txt")
+
+    assertEquals(0, exitCode)
+}
+
+@Test
+fun `returns exit code 3 on network error`() {
+    val tester = ApplicationTester(::execute)
+    tester.setupInvalidNetwork()
+
+    val exitCode = tester.runApplication("config.txt")
+
+    assertEquals(3, exitCode)  // ExitCodes.NETWORK_ERROR
+}
+```
+
+## Verification Checklists
+
+Use these checklists when reviewing code to ensure complete adherence to dependency injection principles.
+
+### Integrations Completeness Checklist
+
+Verify ALL application boundary crossings are in Integrations - both inputs coming in and outputs going out:
+
+**External Inputs (data entering the application):**
+- [ ] **Command-line arguments** - Args array passed from OS/JVM
+- [ ] **Environment variables** - System environment, process environment
+- [ ] **Standard input** - stdin, console input, Scanner from System.in
+- [ ] **Time** - Clock, current timestamp, timers, schedulers
+
+**External Outputs and Services (application interacting with outside world):**
+- [ ] **Standard output** - println, System.out, System.err
+- [ ] **Exit code** - Application's return value to OS/shell (process exit code)
+- [ ] **File system** - Files interface, FileSystem, any paths pointing to real disk
+- [ ] **Network** - HTTP clients, sockets, REST APIs, GraphQL clients
+- [ ] **Database** - JDBC connections, query executors, ORM sessions
+- [ ] **External processes** - ProcessBuilder, Runtime.exec, shell commands
+- [ ] **Message queues** - Kafka producers/consumers, RabbitMQ, SQS
+- [ ] **Email** - SMTP clients, email senders
+- [ ] **Caching** - Redis clients, Memcached (if external)
+- [ ] **Random/Non-deterministic** - Random, SecureRandom, UUID generators
+
+**Test:** Can you run your entire application with substituted external interactions by swapping just the Integrations implementation? If not, something is missing.
+
+**Principle:** If it comes from outside your application or goes to the outside world, and you need to substitute it for testing, it belongs in Integrations. The boundary is the key - not whether it's "I/O" in the technical sense, but whether it crosses the application's edge.
+
+**Counter-example (Incomplete Integrations):**
+```kotlin
+// ❌ BAD - Missing external inputs and hardcoded implementations
+interface Integrations {
+    val clock: Clock
+    val emitLine: (String) -> Unit
+    // ❌ Missing: args, files, exec
+}
+
+fun main(args: Array<String>) {  // ❌ Args not in Integrations
+    val integrations = ProductionIntegrations
+    Dependencies(args, integrations).runner.run()  // ❌ Args passed separately
+}
+
+class Dependencies(
+    args: Array<String>,  // ❌ External input not from Integrations
+    integrations: Integrations
+) {
+    private val files: FilesContract = FilesDelegate  // ❌ Hardcoded!
+    private val exec: Exec = ExecImpl()               // ❌ Hardcoded!
+    // Cannot test with fake args, FakeFiles, or FakeExec
+}
+```
+
+**Correct (Complete Integrations):**
+```kotlin
+// ✅ GOOD - All boundary crossings in Integrations
+interface Integrations {
+    val commandLineArgs: Array<String>  // ✅ External input
+    val clock: Clock
+    val emitLine: (String) -> Unit
+    val files: FilesContract    // ✅ Swappable
+    val exec: Exec              // ✅ Swappable
+}
+
+fun main(args: Array<String>) {
+    val integrations: Integrations = ProductionIntegrations(args)  // ✅ Args bundled
+    Dependencies(integrations).runner.run()  // ✅ Single boundary object
+}
+
+class Dependencies(integrations: Integrations) {
+    private val args = integrations.commandLineArgs  // ✅ From Integrations
+    private val files = integrations.files  // ✅ From Integrations
+    private val exec = integrations.exec    // ✅ From Integrations
+    // Can test entire app with TestIntegrations(testArgs, FakeFiles(), FakeExec())
+}
+```
+
+### Composition Root Purity Checklist
+
+Composition roots (classes ending in "Dependencies") should ONLY wire objects together via constructors. They should never do work.
+
+**Key principle: Constructors wire, methods work. If you need to do work, create a service class with a method, then call that method from the orchestrating code (typically EntryPoint).**
+
+**Forbidden in composition roots:**
+- [ ] **No method calls that do work** - No `.load()`, `.parse()`, `.calculate()`, `.validate()`, etc.
+- [ ] **No conditionals** - No if/when/switch statements (except for null safety on optional dependencies)
+- [ ] **No loops** - No for/while/map/filter/fold
+- [ ] **No calculations** - No arithmetic, string manipulation, data transformations
+- [ ] **No type coercion** - No `.toInt()`, `.toBoolean()`, parsing, conversions
+
+**Acceptable patterns (pure wiring):**
+- ✅ Creating instances via constructors: `val x = Y(dependency1, dependency2)`
+- ✅ Creating collections: `listOf(report1, report2, report3)`
+- ✅ Extracting properties: `val clock = integrations.clock`
+- ✅ Method references (not calls): `val handler = notifications::timeTakenEvent`
+- ✅ Simple literals: `Paths.get("file.json")`, constants
+
+**Counter-example (Composition Root doing work):**
+```kotlin
+// ❌ BAD - Composition root contains logic and method calls
+class BootstrapDependencies(integrations: Integrations) {
+    private val args = integrations.commandLineArgs
+    private val argsParser = ArgsParser
+    private val configBaseName = argsParser.parseConfigBaseName(args)  // ❌ Method call doing work!
+
+    private val loader = ConfigurationLoader(integrations, configBaseName)
+    val configuration = loader.load()  // ❌ Method call doing I/O!
+}
+```
+
+**Correct (Pure composition root + service class):**
+```kotlin
+// ✅ GOOD - Service class with work in methods
+class Bootstrap(private val integrations: Integrations) {
+    private val argsParser = ArgsParser
+
+    fun loadConfiguration(): Configuration {  // Work happens in method
+        val configBaseName = argsParser.parseConfigBaseName(integrations.commandLineArgs)
+        val loader = ConfigurationLoader(integrations, configBaseName)
+        return loader.load()
+    }
+}
+
+// ✅ GOOD - Composition root with only constructors
+class BootstrapDependencies(integrations: Integrations) {
+    val bootstrap: Bootstrap = Bootstrap(integrations)  // Only wiring
+}
+
+// ✅ GOOD - Orchestration calls methods explicitly
+fun execute(args: Array<String>): Int {
+    val integrations = ProductionIntegrations(args)
+
+    val bootstrapDeps = BootstrapDependencies(integrations)  // Wiring
+    val configuration = bootstrapDeps.bootstrap.loadConfiguration()  // Work - explicit!
+
+    val appDeps = ApplicationDependencies(integrations, configuration)
+    appDeps.runner.run()
+
+    return integrations.exitCode.value
+}
+```
+
+**More examples of pure composition roots:**
+```kotlin
+// ✅ GOOD - Application composition root with pure wiring
+class ApplicationDependencies(
+    integrations: Integrations,
+    configuration: Configuration
+) {
+    private val clock = integrations.clock
+    private val files = integrations.files
+
+    // Direct extraction from config - no loading, no coercion
+    private val countAsErrors = configuration.countAsErrors
+    private val maxErrors = configuration.maximumAllowedErrorCount
+    private val inputDir = configuration.inputDir
+
+    // Simple instantiation - only constructors
+    private val observer = ObserverImpl(
+        inputDir,
+        configuration.sourcePrefix,
+        configuration.isSourceFile,
+        configuration.isBinaryFile,
+        fileFinder,
+        nameParser,
+        relationParser,
+        files,
+        configuration.outputDir,
+        configuration.useObservationsCache
+    )
+
+    // Simple list construction
+    private val reports = listOf(
+        staticContentReport,
+        tableOfContentsReport,
+        sourcesReport
+    )
+
+    val runner: Runnable = Runner(clock, observer, reports)
+}
+```
+
+### Configuration vs Integrations
+
+**Integrations** = Anything that crosses the application boundary
+- Raw external inputs: `commandLineArgs`, `environmentVariables`, `stdin`
+- External outputs: `stdout`, `stderr`, `emitLine`
+- External services: `files`, `clock`, `network`, `database`, `exec`
+- Created at entry point
+- The boundary itself, not what comes through it
+
+**Configuration** = Structured values derived from parsing/loading external sources
+- Examples: `inputDir`, `outputDir`, `maxRetries`, `enableFeatureX`, `configBaseName`
+- Parsed/loaded by Bootstrap stage using Integrations
+- Just data - no methods, represents application settings after interpretation
+
+**The distinction:** Integrations contains `commandLineArgs: Array<String>` (raw input from OS), while Configuration contains `configBaseName: String` (parsed from args) and `maxRetries: Int` (loaded from config file using `integrations.files`). Integrations is the channel, Configuration is the message.
+
+**Counter-example (Configuration in Integrations):**
+```kotlin
+// ❌ BAD - Mixing derived configuration with boundary crossings
+interface Integrations {
+    val clock: Clock
+    val emitLine: (String) -> Unit
+    val configBaseName: String      // ❌ This is derived from args, not the args themselves!
+    val maxRetries: Int             // ❌ This is loaded from a file, not the file system!
+}
+```
+
+**Correct (Separated):**
+```kotlin
+// ✅ GOOD - Only boundary crossings in Integrations
+interface Integrations {
+    val commandLineArgs: Array<String>  // ✅ Raw input from OS
+    val environmentVariables: Map<String, String>  // ✅ Raw input from environment
+    val clock: Clock
+    val emitLine: (String) -> Unit
+    val files: FilesContract  // ✅ Used by Bootstrap to load config
+    val exec: Exec
+}
+
+// Configuration derived by Bootstrap using Integrations
+data class Configuration(
+    val configBaseName: String,  // ✅ Parsed from integrations.commandLineArgs
+    val maxRetries: Int,         // ✅ Loaded from file via integrations.files
+    val inputDir: Path,
+    val outputDir: Path
+)
+```
+
+### Red Flags Indicating Violations
+
+When reviewing code, these patterns indicate dependency injection violations:
+
+**In Integrations:**
+- ❌ Args passed separately from Integrations to composition roots (`Dependencies(args, integrations)`)
+- ❌ Dependencies class instantiates concrete I/O implementations (`= FilesDelegate`, `= ExecImpl()`)
+- ❌ Dependencies class or domain classes use I/O not present in Integrations (search for `Files.`, `System.`, `ProcessBuilder`, etc.)
+- ❌ Integrations contains derived/parsed values rather than raw external inputs (likely configuration leaking in)
+- ❌ Domain classes call static methods on `Files`, `Paths`, `System`
+
+**In Composition Roots:**
+- ❌ Calls to `.load()`, `.read()`, `.fetch()`, `.get()` (I/O during wiring)
+- ❌ Calls to `.coerceTo*()`, `.parse*()`, `.toInt()` (type conversion during wiring)
+- ❌ Contains `if`, `when`, `switch`, `for`, `while`, `map`, `filter`, `fold`
+- ❌ Arithmetic operators in non-trivial expressions (`+`, `-`, `*`, `/`, `%`)
+- ❌ Multi-line expressions that compute values rather than construct objects
+- ❌ More than 200 lines without clear staging separation
+
+**In Tests:**
+- ❌ Cannot test full application flow without real file system
+- ❌ Cannot test time-dependent behavior (no Clock injection)
+- ❌ Tests mock internal collaborators instead of swapping I/O boundaries
+- ❌ Integration tests required for basic business logic testing
+
+## Rationale
+"Why do command-line args belong in Integrations rather than passed separately?" Args cross the application boundary - they come from outside (user, OS, shell script). In tests, you substitute fake args just like you substitute fake files or fake clocks. Keeping args separate from Integrations means you have two things to swap for testing instead of one. The principle: Integrations captures everything that crosses the boundary, not just things that perform operations. Args are external input that must be substituted, so they belong with other boundary crossings. The fact that args are "just data" (Array<String>) doesn't matter - they're external data requiring substitution, like environment variables or stdin.
+
+"Why not just new up dependencies where needed?" Direct instantiation couples classes to specific implementations. When `OrderService` creates `new SqlDatabase()`, you cannot test `OrderService` without a real database. When dependencies are injected as interfaces, you can test with `FakeDatabase` and run production with `SqlDatabase` without changing `OrderService`.
+
+"What about simple cases where I'll never swap implementations?" The ability to fake dependencies for testing is valuable even if you never change production implementations. A `Clock` interface seems unnecessary until you need to test time-dependent behavior. A `Random` interface seems excessive until you need deterministic tests. The discipline of injecting these dependencies makes testing straightforward.
+
+"Why can value objects stay concrete?" Value objects like `Money`, `Address`, or `User` are pure data with no varying behavior. There's no benefit to hiding `Address` behind an interface - you'd just be adding ceremony. The same `Address` works in tests and production. The distinction is: inject things that do work (behavior), not things that hold data (values).
+
+"Doesn't this create too many interfaces?" Only behavioral dependencies need interfaces. In a typical service class, you might inject 3-5 interfaces (database, mail service, clock, ID generator) but directly use dozens of domain objects and value types. The interface count stays manageable because most types are pure data.
+
+"What about constructors with many parameters?" This often signals a class with too many responsibilities. Split it. However, composition roots legitimately have many parameters because their job is wiring. That's acceptable - composition roots are the only place allowed to know about all the concrete implementations.
+
+"Why ban business logic from composition roots?" Composition roots are hard to test because they create real implementations. Keeping them pure construction (no conditionals, no calculations) means there's nothing to test. All testable logic lives in classes that receive injected dependencies.
+
+"Why must constructors not do work?" When constructors perform I/O, parsing, or logic, that work is hidden from callers. `val bootstrap = Bootstrap(integrations)` looks like pure wiring but secretly reads files, parses config, and validates inputs. The caller cannot tell whether constructing the object is cheap or expensive, synchronous or potentially blocking. This makes reasoning about code difficult - you must read constructor implementations to understand what happens.
+
+The solution: constructors only wire references, methods do work. `val bootstrap = Bootstrap(integrations)` becomes obviously cheap (just stores a reference), while `val config = bootstrap.loadConfiguration()` is obviously doing work (method call). This syntactic distinction makes the flow visible: you can trace execution by looking at method calls, and you know constructors are always fast and safe.
+
+Additionally, composition roots with only constructors need no tests - there's no logic to verify. All testable behavior lives in service classes with methods. This separates "what we wire together" (composition roots, untestable by nature) from "what we do" (service methods, fully testable).
+
+"How does staging help with runtime configuration?" Staging interleaves wiring and work: create Integrations (wire) → load configuration (work) → create ApplicationDependencies (wire) → run application (work). EntryPoint orchestrates this explicitly, making the sequence visible. Each stage is independently testable because dependencies are explicit (constructor parameters) rather than hidden (global state, work in constructors).
+
+Compare hidden staging (work in constructors): `val app = ApplicationDependencies(args)` - impossible to tell what work happens or in what order.
+
+With explicit staging (work in methods):
+```kotlin
+val integrations = ProductionIntegrations(args)
+val bootstrapDeps = BootstrapDependencies(integrations)
+val config = bootstrapDeps.bootstrap.loadConfiguration()  // ← work visible here
+val appDeps = ApplicationDependencies(integrations, config)
+appDeps.runner.run()  // ← work visible here
+```
+
+You can see exactly where work happens and in what sequence. The staging is not hidden in constructor chains.
+
+"How does separating integrations enable deep testing?" When all boundary crossings (args, files, clock, network, stdout) are bundled in Integrations, you can test the entire application by swapping one object. Production passes `ProductionIntegrations(realArgs)` with real external interactions. Deep tests pass `TestIntegrations(testArgs, fakeFiles, fakeClock, capturedOutput)`. The entire `ApplicationDependencies` wiring is reused - only the boundary changes. This enables testing through the full dependency chain without mocking internal collaborators. You test `a -> b -> c -> d` with fake boundaries at the edges, rather than testing `a -> b-stub` separately from `b -> c-stub`.
+
+Deep testing advantages: tests real integration, simpler test setup, no mock coordination. Deep testing disadvantages: harder to test edge cases, side effects must be stubbed. Shallow testing advantages: full control over collaborator behavior, scales infinitely, edge cases straightforward. Shallow testing disadvantages: tests know about internal design, more mocking code.
+
+The choice depends on context: side effects must be stubbed (databases, time), complicated collaborators suggest stubbing, deterministic simple classes don't need stubbing. Both strategies are valid. Separated integrations make deep testing practical when appropriate.
+
+"How does AI change the shallow vs deep testing decision?" Traditionally, refactoring is expensive (manual, error-prone), so developers choose shallow testing upfront to avoid future refactoring pain. This leads to over-engineering abstractions "just in case." With AI-assisted refactoring, the economics change: refactoring becomes cheap (AI automates mechanical work), so you can start with deep testing (simpler, tests real integration) and refactor to shallow only when tests become hard to write.
+
+The pattern: start deep, let complexity guide you. When tests require complicated setup or edge cases become unwieldy, ask AI to extract side effects into injected interfaces. AI executes the mechanical refactoring (extract interface, update constructor, wire through composition roots) while you retain architectural decisions (what to extract, where boundaries should be, testing strategy).
+
+Decision authority remains with humans: you decide testing strategy, what to test, when to refactor. AI executes: the mechanical refactoring work, intermediate steps, implementation details. AI has discretion in how to implement, but you control the architectural trade-offs. The benefit: simpler initial code, refactor when complexity justifies it rather than preemptively defending against hypothetical future requirements.
+
+"What's the connection to the Reader monad?" (Side note, not the primary point) The composition pipeline pattern mirrors the Reader monad from functional programming. Reader threads an environment through computations with signature `Reader env a = env -> a` (environment to result). In OOP, this becomes dependencies-in-constructor, behavior-as-methods: the class takes environment (integrations, configuration) and exposes behavior (runner). The companion factory `fromConfiguration(integrations: Integrations, config: Configuration): Runnable` has the Reader signature - it's a function from environments to results. Each stage is a Reader computation: takes its environment, produces the next stage. The composition is explicit (manual chaining through constructors) rather than implicit (Haskell's do-notation), but the structure is the same.
+
+## Pushback
+This rule assumes testability and flexibility are worth the cost of additional interfaces and explicit wiring. It values being able to test each class in isolation over the simplicity of direct instantiation. It assumes you'll benefit from swapping implementations (even if just test vs production) more than you'll suffer from the indirection.
+
+You might reject this rule if you prioritize simplicity over testability, working in a context where testing is less critical (scripts, prototypes, throw-away code). You might disagree if your codebase is small enough that integration tests suffice, making unit test isolation unnecessary. You might prefer concrete dependencies if you value seeing exactly what code runs over the ability to substitute implementations. You might favor directness over flexibility if you trust that your implementations will never change and testing against real dependencies is acceptable.
