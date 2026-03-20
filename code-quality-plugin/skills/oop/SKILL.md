@@ -4,7 +4,7 @@ description: Apply OOP and code quality rules for maintainable software
 
 # Code Quality Rules
 
-When the user asks you to "check against rules" or similar, apply these object-oriented programming and code quality rules designed to prevent genuine maintainability problems.
+Apply these rules when writing, modifying, reviewing, or designing code
 
 **IMPORTANT**: This skill includes detailed reference documents in the `rules/` directory. Consult these for comprehensive guidance:
 - `rules/quick-reference.md` - Fast violation lookup
