@@ -39,6 +39,8 @@ Apply these guidelines with judgment:
 
 - **Framework initialization**: With staged dependency injection (see Dependency Injection rule), even framework initialization code can inject output dependencies through the Integrations stage. The only code that might use direct console output is the absolute entry point (main function) before any composition roots are constructed - typically just 2-3 lines creating integrations and starting the bootstrap stage.
 
+- **Humble I/O adapters at infrastructure boundaries**: Thin adapter layers that translate between the domain and system primitives (CLI adapters, HTTP controllers) may use direct console output if all testable business logic is extracted into separate pure functions. For example, a `TopLevelExceptionHandler` that catches exceptions, formats them via `FailureMessageFormatter` (tested separately), maps them to exit codes via `ExitCodeMapper` (tested separately), then writes to `System.err` is acceptable. The adapter itself is so thin and obvious it doesn't need testing - it merely glues tested components together with trivial I/O. This is the "Humble Object" pattern: extract all testable logic into pure functions, leaving only trivial I/O plumbing in the untested adapter. The key test: if the adapter were tested, would you be testing anything beyond "does it call these methods and write their results"?
+
 - **Simple one-off scripts**: Throwaway scripts or utilities that will never need testing may use direct console output. If the script becomes permanent or needs testing, refactor to use event interfaces.
 
 - **Console applications**: Even applications whose explicit purpose is console interaction should inject their output mechanism (e.g., `emit: (String) -> Unit`) rather than calling `System.out` directly. This maintains testability and allows output redirection.
@@ -228,6 +230,51 @@ fun main(args: Array<String>) {
 ```
 
 **Why acceptable:** The absolute entry point (main function) runs before any composition roots exist. After creating Integrations (which bundles args and all other boundary crossings), use staged dependency injection to inject everything through Integrations - see the Dependency Injection rule's "Composition Pipeline Pattern" section.
+
+### ✅ ACCEPTABLE: Humble I/O adapter with extracted testable logic
+```kotlin
+// Testable pure functions (tested separately)
+object ExitCodeMapper {
+    fun mapResultToExitCode(result: ApplicationResult): Int {
+        return if (result.allManifestsUploaded()) ExitCodes.SUCCESS
+               else ExitCodes.NOT_ALL_MANIFESTS_UPLOADED
+    }
+}
+
+object FailureMessageFormatter {
+    fun formatFailureMessages(result: ApplicationResult): List<String> {
+        return result.failures.map { failure ->
+            "Unable to upload manifest for ${failure.directory} because: ${failure.message}"
+        }
+    }
+}
+
+// Humble I/O adapter - thin glue code at infrastructure boundary
+object TopLevelExceptionHandler {
+    fun executeReturningExitCode(integrations: Integrations): Int {
+        return try {
+            val result = CompositionPipeline.orchestrateStages(integrations)
+            FailureMessageFormatter.formatFailureMessages(result).forEach { message ->
+                System.err.println(message)  // Trivial I/O - just writing strings
+            }
+            ExitCodeMapper.mapResultToExitCode(result)  // Using tested mapper
+        } catch (e: Exception) {
+            System.err.println("Error: ${e.message}")  // Last-resort edge case
+            ExitCodes.GENERAL_ERROR
+        }
+    }
+}
+```
+
+**Why acceptable:**
+1. **It's a thin I/O adapter** - No business logic, just gluing tested components
+2. **All testable logic is extracted** - ExitCodeMapper and FailureMessageFormatter are tested separately
+3. **What remains is trivially correct** - `System.err.println()` is self-evidently correct
+4. **It sits at the infrastructure boundary** - This is WHERE the translation from domain (`ApplicationResult`) to system primitives (stderr, exit codes) happens
+
+This is the Humble Object pattern: all interesting logic lives in testable pure functions, leaving only trivial I/O plumbing untested. If you were to test TopLevelExceptionHandler, you'd only be verifying "does it call these methods and write their output to stderr" - which is so simple it's self-verifying.
+
+**Contrast with VIOLATION:** If TopLevelExceptionHandler contained the logic for mapping results to exit codes or formatting failure messages (rather than delegating to tested helpers), it would be a violation because that business logic would be untestable.
 
 ## Rationale
 

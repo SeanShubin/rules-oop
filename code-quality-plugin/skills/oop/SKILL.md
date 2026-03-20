@@ -53,7 +53,8 @@ When the user asks you to "check against rules" or similar, apply these object-o
 | api/impl split | `model/api/` and `model/implementation/` | Standard pattern, aids navigation |
 | Type dispatch in parsers | `if (value is Map) ... else if (value is List)` | Type checking IS the domain logic |
 | Runtime-calculated CSS | `style="width: ${percentage}%"` in progress bar | Value only known at runtime, static styles in CSS |
-| Temporary debugging output | `println("DEBUG: processing...")` | Temporary investigation, removed after debugging complete |
+| Temporary debugging output | `println("DEBUG: processing...")` | Temporary investigation, removed after debugging complete (may need commit for production debugging) |
+| Humble I/O adapter | `System.err.println()` in TopLevelExceptionHandler | At infrastructure boundary, all testable logic extracted to tested helpers (ExitCodeMapper, FailureMessageFormatter) |
 
 ## Rule Priority Order
 
@@ -88,7 +89,8 @@ Depend on interfaces for behavior; inject through composition roots.
 Define explicit event interfaces; inject handlers; preserve structured data.
 - **Problem**: Global event access (System.out, logger) makes code untestable
 - **Test**: Can you verify that important events occurred in tests?
-- **Details**: See the full document for event interface patterns and structured data preservation
+- **Exception**: Humble I/O adapters at infrastructure boundaries with all testable logic extracted to pure functions
+- **Details**: See the full document for event interface patterns, structured data preservation, and Humble Object pattern
 
 ### 4. Abstraction Levels → `rules/abstraction-levels.md`
 Separate orchestration from mechanics; each method operates at a consistent level.

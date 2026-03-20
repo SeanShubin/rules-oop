@@ -33,6 +33,7 @@ Fast lookup guide for common situations. For details, see the full rules.
 | Type dispatch in parsers | `if (value is Map) ... else if (value is List)` | Type checking IS the domain logic |
 | Runtime-calculated CSS | `style="width: ${percentage}%"` in progress bar | Value only known at runtime, static styles in CSS |
 | Temporary debugging output | `println("DEBUG: processing...")` | Temporary investigation, removed after debugging complete (may need commit for production debugging) |
+| Humble I/O adapter | `System.err.println()` in TopLevelExceptionHandler | At infrastructure boundary, all testable logic extracted to tested helpers (ExitCodeMapper, FailureMessageFormatter) |
 
 ## Quick Decision Tree
 
