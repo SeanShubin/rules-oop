@@ -1,10 +1,10 @@
 ---
-description: Apply OOP and code quality rules for maintainable software
+name: Sean's OOP rules
+description: Apply these rules when writing, modifying, reviewing, or designing code. Covers coupling/cohesion, dependency injection, abstraction levels, package
+  hierarchy, anonymous code, event systems, language separation, and free-floating functions for maintainable software.
 ---
 
 # Code Quality Rules
-
-Apply these rules when writing, modifying, reviewing, or designing code
 
 **IMPORTANT**: This skill includes detailed reference documents in the `rules/` directory. Consult these for comprehensive guidance:
 - `rules/quick-reference.md` - Fast violation lookup
