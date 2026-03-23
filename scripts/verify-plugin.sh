@@ -50,7 +50,7 @@ else
         --brief || true
     echo ""
     echo "To sync and reinstall:"
-    echo "  ./sync-plugin.sh"
+    echo "  ./scripts/sync-plugin.sh"
     echo "  claude plugin install code-quality@seanshubin"
     exit 1
 fi

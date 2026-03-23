@@ -109,4 +109,4 @@ claude plugin marketplace add "$REPO_ROOT" > /dev/null 2>&1 || true
 echo "✅ Test complete"
 echo ""
 echo "To continue local development, reinstall from local:"
-echo "  ./update-plugin.sh"
+echo "  ./scripts/update-plugin.sh"
