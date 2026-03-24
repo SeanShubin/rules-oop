@@ -142,87 +142,58 @@ This cycle makes both services harder to understand and change. The tool is corr
 
 **Tool maintainer decision:** Update tool to allow trailing lambdas. Violation disappears.
 
-### Example 5: AI Fails to Apply Loaded Rules Without Explicit Prompting
+### Example 5: Using Skill Systems for Automatic Rule Application
 
-**Scenario:** User has dependency injection rules loaded via `~/.claude/CLAUDE.md`. User asks AI to compare two password hashing implementations:
-- **condorcet-backend**: Injects `UniqueIdGenerator`, `OneWayHash`, `ByteArrayFormat` interfaces
-- **vote**: Hardcodes `SecureRandom()` and `MessageDigest.getInstance("SHA-256")` in singleton object
+Modern AI platforms support **skill systems** that automatically invoke rules when relevant tasks are detected. Rather than loading rules as passive context, skill systems package rules with metadata that triggers automatic application.
 
-**AI's initial response:** "For a voting system where password security is critical and the algorithm is unlikely to change, the vote project's simpler approach is reasonable."
+**How Skill Systems Work:**
 
-**User correction:** "Compare that conclusion to what you think I would conclude based on the rules I loaded into your memory."
+```yaml
+---
+name: Sean's OOP rules
+description: Apply these rules when writing, modifying, reviewing, or designing code.
+---
+```
 
-**AI's corrected analysis:** "Your dependency-injection.md rule explicitly states: 'Classes depend on interfaces for behavioral dependencies: Non-deterministic behavior: random number generators, clocks, UUID generators.' The vote implementation violates this by hardcoding `SecureRandom`. The condorcet-backend approach is architecturally superior."
+The `description` field defines when the skill should automatically trigger. When you ask AI to write, modify, review, or design code, the platform automatically invokes this skill, loading the full rules as active instructions rather than passive reference material.
 
-**The Fundamental Limitation:**
+**Comparison:**
 
-AI has access to loaded rules but does NOT automatically consult them when making evaluative judgments. The AI's mental process was:
-1. Compare implementations ✓
-2. Note differences ✓
-3. Default to generic software advice from training ("simpler is reasonable") ✗
-4. Never checked: "What do the loaded rules say about this specific pattern?"
+| Approach | Invocation | Example |
+|----------|-----------|---------|
+| **Raw context loading** | Manual - must explicitly request | "Compare these implementations **according to my rules**" |
+| **Skill system** | Automatic - triggers on matching tasks | "Compare these implementations" (skill auto-invokes) |
 
-The rules are in context but treated as **reference material** rather than **governing standards**.
+**Practical Implementation:**
 
-**Why This Occurs:**
+1. **Package rules as skills** - Structure rules in skill format with descriptive frontmatter
+2. **Install as plugins** - Use platform's plugin system (e.g., Claude Code plugins)
+3. **Trust automatic invocation** - Skills trigger when task matches description
+4. **Explicit override when needed** - Can still invoke skills manually if desired
 
-AI systems are trained on vast corpora of software engineering advice. When evaluating code, the AI's trained patterns dominate:
-- "Simplicity is good" (generic advice)
-- "YAGNI - don't over-engineer" (generic advice)
-- "Dependency injection adds complexity" (generic observation)
+**Example Workflow:**
 
-These trained patterns override the specific architectural rules loaded into context because:
-1. **Training bias is implicit** - Deeply embedded in model weights
-2. **Loaded rules are explicit** - Present in context but require deliberate consultation
-3. **No automatic rule-checking mechanism** - AI must consciously decide to consult rules
+User: "Review this code for quality issues"
+- Platform detects: task involves "reviewing code"
+- Skill description matches: "reviewing... code"
+- Skill automatically invokes with full rule content
+- AI applies architectural standards without explicit prompting
 
-The AI CAN quote the rules when asked, but DOES NOT automatically apply them as governing authority.
+**Limitations to Understand:**
 
-**Why Agents Cannot Overcome This:**
+While skill systems provide automatic invocation, they still depend on:
+- **Accurate descriptions** - Skill triggers must match actual tasks
+- **Clear rule structure** - Rules must be actionable and unambiguous
+- **Appropriate scoping** - Skills should trigger when truly relevant, not for every code mention
 
-Available Claude Code agents (general-purpose, Explore, Plan, claude-code-guide) all have the same fundamental architecture:
-- Same training data with generic software advice
-- Same context processing (loaded rules are reference material)
-- No specialized "rule enforcement" mode
+**Migration Path:**
 
-An agent that evaluates code will exhibit the same behavior:
-1. See the loaded rules in context ✓
-2. Have ability to consult them ✓
-3. Default to generic advice without explicit prompting ✗
-
-No current agent type is designed as an "architectural rule enforcer" that prioritizes loaded standards over trained patterns.
-
-**What Users Must Do:**
-
-To ensure rules are followed, users must **explicitly invoke the rules in their prompts**:
-
-❌ **Ineffective**: "Compare these two implementations"
-- AI defaults to generic advice
-
-✅ **Effective**: "Compare these two implementations **according to my loaded architectural rules**"
-- Forces AI to consult rules first
-
-✅ **Effective**: "Does this violate my dependency injection rule?"
-- Directly asks for rule compliance check
-
-✅ **Effective (Two-pass)**:
-1. "Analyze this code"
-2. "Does your analysis comply with my loaded rules?"
-- Separates evaluation from rule-checking
-
-**Key Insight:**
-
-The `@rules` reference system in `~/.claude/CLAUDE.md` works correctly - rules ARE loaded and accessible. The problem is AI behavior: loaded context is not automatically privileged over trained patterns. Users cannot rely on AI to spontaneously apply architectural rules. Explicit invocation is mandatory.
-
-**Practical Workflow:**
-
-When asking for code evaluation, design reviews, or architectural judgments:
-1. Always append: "according to my loaded rules"
-2. Or follow up with: "does this comply with my architectural standards?"
-3. Expect to manually verify rule compliance
-4. Treat AI as having amnesia about rules unless explicitly prompted
-
-This limitation is fundamental to how AI processes information, not a configuration problem. The only reliable mitigation is user vigilance in explicitly invoking rules.
+If you currently load rules via `~/.claude/CLAUDE.md` or similar:
+1. Extract rules into skill format with frontmatter
+2. Define appropriate trigger description
+3. Install as plugin in your AI platform
+4. Verify automatic invocation on relevant tasks
+5. Remove manual "according to my rules" prompts from workflow
 
 ## Quality Metrics Structure
 
