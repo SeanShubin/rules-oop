@@ -4,13 +4,13 @@
     "name": "Sean Shubin"
   },
   "metadata": {
-    "description": "Sean Shubin's code quality rules (OOP, ECS, and more)"
+    "description": "Sean Shubin's code quality rules"
   },
   "plugins": [
     {
       "name": "code-quality",
       "source": "./code-quality-plugin",
-      "description": "Code quality rules for maintainable software (OOP, ECS, and more)",
+      "description": "Code quality rules for maintainable software",
       "version": "1.0.0"
     }
   ]

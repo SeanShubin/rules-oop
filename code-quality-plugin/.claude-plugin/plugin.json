@@ -1,10 +1,10 @@
 {
   "name": "code-quality",
-  "description": "Code quality rules for maintainable software (OOP, ECS, and more)",
+  "description": "Code quality rules for maintainable software",
   "version": "1.0.0",
   "author": {
     "name": "Sean Shubin"
   },
   "license": "MIT",
-  "keywords": ["code-quality", "oop", "ecs", "maintainability", "testing", "architecture"]
+  "keywords": ["code-quality", "oop", "maintainability", "testing", "architecture"]
 }
