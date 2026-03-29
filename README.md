@@ -2,17 +2,39 @@
 
 This directory contains architectural and code quality rules designed to prevent genuine maintainability problems without creating false alarms for reasonable design choices.
 
-**Using with Claude Code?**
-- See [claude-code-setup.md](claude-code-setup.md) for symlink-based setup (quick start)
-- See [creating-a-plugin.md](creating-a-plugin.md) for plugin-based distribution (no symlinks needed, includes sync script for maintenance)
+## Installation
 
-**Plugin Quick Reference:**
+### For Claude Code Users
+
 ```bash
-./sync-plugin.sh             # Sync rules to plugin, check if reinstall needed
-./verify-plugin.sh           # Check if installed plugin matches source (read-only)
-./install-plugin-local.sh    # Install from local directory (daily workflow)
-./install-plugin-github.sh   # Install from GitHub (test distribution before release)
+# Add the plugin marketplace
+claude plugin marketplace add SeanShubin/rules-oop
+
+# Install the plugin
+claude plugin install code-quality@seanshubin
+
+# Start Claude Code
+claude
 ```
+
+### Usage
+
+The plugin provides automatic code quality validation:
+
+- **Automatic validation**: After any code is written or modified, all changes are automatically validated against the rules
+- **Manual invocation**: You can also manually trigger evaluation with `/code-quality:oop`
+- **Skill auto-triggers**: The skill automatically activates when writing, modifying, reviewing, or designing code
+
+### What You Get
+
+- **8 core rules** for maintainable code (coupling/cohesion, dependency injection, abstraction levels, etc.)
+- **Automatic validation hook** that checks all git changes after Write/Edit operations
+- **Severity-based reporting** (Always Violations → Usually Violations)
+- **Immediate fix offers** when violations are found
+
+### For Plugin Developers
+
+If you're modifying or maintaining the plugin itself, see [scripts/README.md](scripts/README.md) for the development workflow including sync, verify, and testing scripts.
 
 ## The Rules
 
