@@ -4,7 +4,7 @@
 
 set -e
 
-REPO_ROOT="/Users/seashubi/github.com/SeanShubin/rules-oop"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
 INSTALLED="$HOME/.claude/plugins/cache/seanshubin/code-quality/1.0.0"
 
 cd "$REPO_ROOT"
