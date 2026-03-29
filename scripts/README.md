@@ -2,6 +2,27 @@
 
 This directory contains scripts for managing the code-quality plugin.
 
+## Plugin Structure
+
+The `code-quality-plugin/` contains:
+- **`rules/`** - Rule markdown files (synced from repo root via sync-plugin.sh)
+- **`skills/oop/`** - The main skill that loads the rules into context
+- **`commands/`** - Manual validation commands:
+  - `validate-changes.md` - Evaluate git diffs on demand
+  - `validate-project.md` - Comprehensive codebase assessment
+- **`hooks/`** - Automatic validation hooks:
+  - `validate-changes.md` - PostToolUse hook that runs after Write/Edit operations
+- **`.claude-plugin/`** - Plugin metadata (plugin.json)
+
+**Note**: Skills, commands, and hooks are all installed together when users run `claude plugin install code-quality@seanshubin`. No separate installation or activation is needed for individual components.
+
+## How They Work Together
+
+- **Hook** (`hooks/validate-changes.md`): Automatically runs after Write/Edit operations, validates changes
+- **Command** (`commands/validate-changes.md`): Manual equivalent - user runs `/validate-changes` to validate on demand
+- **Command** (`commands/validate-project.md`): Different scope - user runs `/validate-project` for comprehensive assessment
+- **Skill** (`skills/oop/`): Provides the rules that all validation uses; auto-triggers during code work
+
 ## Scripts
 
 ### sync-plugin.sh

@@ -17,18 +17,48 @@ claude plugin install code-quality@seanshubin
 claude
 ```
 
-### Usage
+### How It Works
 
-The plugin provides automatic code quality validation:
+The plugin provides three ways to validate your code:
 
-- **Automatic validation**: After any code is written or modified, all changes are automatically validated against the rules
-- **Manual invocation**: You can also manually trigger evaluation with `/code-quality:oop`
-- **Skill auto-triggers**: The skill automatically activates when writing, modifying, reviewing, or designing code
+#### 1. Automatic Validation (Hook)
+
+After Claude writes or edits any code, a **PostToolUse hook** automatically:
+- Runs `git diff` and `git diff --staged` to see all changes
+- Evaluates changed code against the rules
+- Reports violations by severity (Always Violations → Usually Violations)
+- Offers to fix violations immediately
+
+This ensures every code change is validated without you having to remember to ask.
+
+#### 2. Manual Commands
+
+**`/validate-changes`** - On-demand validation of your diffs
+- Same behavior as the automatic hook, but triggered manually
+- Useful when you want to re-check changes or validate before committing
+- Evaluates both staged and unstaged changes
+
+**`/validate-project`** - Comprehensive codebase assessment
+- High-level architectural evaluation of the entire project
+- Uses intelligent scanning for large codebases (doesn't read every file)
+- Identifies systemic issues, architectural problems, and patterns
+- Provides actionable priorities for improvement
+
+#### 3. Skill Auto-Triggers
+
+The `code-quality:oop` skill automatically activates when Claude is writing, modifying, reviewing, or designing code, making Claude aware of the rules during development.
+
+#### Relationship Between Hook and Commands
+
+- **Hook**: Automatically runs validation like `/validate-changes` after every Write/Edit
+- **`/validate-changes`**: Manual equivalent of the hook - use when you want to validate on demand
+- **`/validate-project`**: Different use case - comprehensive assessment for understanding overall code health
 
 ### What You Get
 
 - **8 core rules** for maintainable code (coupling/cohesion, dependency injection, abstraction levels, etc.)
-- **Automatic validation hook** that checks all git changes after Write/Edit operations
+- **Automatic validation** after every code change via PostToolUse hook
+- **Manual validation commands** for on-demand checks and project assessment
 - **Severity-based reporting** (Always Violations → Usually Violations)
 - **Immediate fix offers** when violations are found
 
