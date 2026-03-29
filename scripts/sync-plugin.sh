@@ -25,6 +25,9 @@ cp coupling-and-cohesion.md \
    README.md \
    code-quality-plugin/rules/
 
+echo "Syncing hooks..."
+# Hooks directory already exists in plugin, no copy needed
+
 echo "Validating plugin..."
 cd code-quality-plugin
 claude plugin validate .
