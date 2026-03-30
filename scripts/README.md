@@ -18,10 +18,15 @@ The `code-quality-plugin/` contains:
 
 ## How They Work Together
 
-- **Hook** (`hooks/validate-changes.md`): Automatically runs after Write/Edit operations, validates changes
-- **Command** (`commands/validate-changes.md`): Manual equivalent - user runs `/validate-changes` to validate on demand
-- **Command** (`commands/validate-project.md`): Different scope - user runs `/validate-project` for comprehensive assessment
+- **Command** (`commands/validate-changes.md`): Contains validation logic - evaluates git diffs against rules
+- **Hook** (`hooks/validate-changes.md`): Automatically invokes `/validate-changes` after Write/Edit operations
+- **Command** (`commands/validate-project.md`): Different scope - comprehensive codebase assessment
 - **Skill** (`skills/oop/`): Provides the rules that all validation uses; auto-triggers during code work
+
+**Architecture**: The hook delegates to the command. This means:
+- Single source of truth for validation logic (the command)
+- Consistent behavior between automatic (hook) and manual (user-invoked) validation
+- Update validation logic in one place
 
 ## Scripts
 
