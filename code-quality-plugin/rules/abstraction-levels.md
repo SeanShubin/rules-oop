@@ -36,6 +36,33 @@ These patterns are NOT violations:
 
 **Test:** Ask "If I extract this, does it reduce complexity or just move it?" If extraction creates a new abstraction with no clear responsibility, or forces artificial naming ("getAndCast", "doTypeCheck"), leave it inline. Extraction should reveal intent, not obscure it.
 
+## Abstraction Completeness
+
+A method that claims to compute a value for a type should handle all subtypes or variants of that type. If callers must check which subtype they have and route around the method for some cases, the method's abstraction is incomplete — the boundary is in the wrong place.
+
+**Test:** Ask "Can a caller use this method without knowing what kind of input it has?" If the answer is no — if the caller must instanceof-check, or special-case certain subtypes, or call a different method for some variants — the method needs to handle those cases internally (often via polymorphism or internal dispatch).
+
+### Violation: Caller routes around incomplete method
+```java
+// getArea() only works for simple shapes, not composites
+double area;
+if (shape instanceof CompositeShape) {
+    area = calculateCompositeArea((CompositeShape) shape);
+} else {
+    area = shape.getArea();
+}
+```
+
+### Fix: Method handles all variants internally
+```java
+// shape.getArea() handles all shape types via polymorphism
+double area = shape.getArea();
+```
+
+Each subtype implements `getArea()` appropriately. Callers never need to know whether the shape is simple or composite.
+
+**Why this matters:** When a new subtype is added, an incomplete method silently returns wrong results for the new type. Every caller must independently discover and handle the gap. A complete method — whether via polymorphism, internal dispatch, or visitor pattern — makes the gap immediately visible and fixable in one place.
+
 ## Examples of Genuine Violations vs. Acceptable Patterns
 
 ### ❌ VIOLATION: Business orchestration mixed with string parsing
